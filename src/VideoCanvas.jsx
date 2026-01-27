@@ -108,35 +108,45 @@ function VideoCanvas({ videoFile, onCropChange, onZoomTimeChange, externalCropRe
 
     const { x, y, width, height } = cropRect
 
+    // Antialiasing fix: Round coordinates to avoid sub-pixel flickering on the dashed line
+    const rx = Math.round(x)
+    const ry = Math.round(y)
+    const rw = Math.round(width)
+    const rh = Math.round(height)
+
     // Darken area outside crop
     ctx.fillStyle = 'rgba(0, 0, 0, 0.5)'
-    ctx.fillRect(0, 0, canvasWidth, y)
-    ctx.fillRect(0, y, x, height)
-    ctx.fillRect(x + width, y, canvasWidth - (x + width), height)
-    ctx.fillRect(0, y + height, canvasWidth, canvasHeight - (y + height))
+    ctx.fillRect(0, 0, canvasWidth, ry)
+    ctx.fillRect(0, ry, rx, rh)
+    ctx.fillRect(rx + rw, ry, canvasWidth - (rx + rw), rh)
+    ctx.fillRect(0, ry + rh, canvasWidth, canvasHeight - (ry + rh))
 
     // Draw crop border
-    ctx.strokeStyle = 'var(--accent)'
-    ctx.lineWidth = 2
-    ctx.setLineDash([5, 5])
-    ctx.strokeRect(x, y, width, height)
-    ctx.setLineDash([])
+    ctx.strokeStyle = 'rgba(0, 168, 255, 0.3)' // Very subtle accent
+    ctx.lineWidth = 1
+    ctx.strokeRect(rx, ry, rw, rh)
 
     // Draw resize handles
-    const handleSize = 8
+    const handleRadius = 3 // 6px diameter
     const handles = [
-      { x: x - handleSize / 2, y: y - handleSize / 2 }, // top-left
-      { x: x + width - handleSize / 2, y: y - handleSize / 2 }, // top-right
-      { x: x - handleSize / 2, y: y + height - handleSize / 2 }, // bottom-left
-      { x: x + width - handleSize / 2, y: y + height - handleSize / 2 }, // bottom-right
+      { x: x, y: y }, // top-left
+      { x: x + width, y: y }, // top-right
+      { x: x, y: y + height }, // bottom-left
+      { x: x + width, y: y + height }, // bottom-right
     ]
 
     ctx.fillStyle = 'var(--accent)'
+    ctx.strokeStyle = '#ffffff'
+    ctx.lineWidth = 2
+
     handles.forEach(handle => {
-      ctx.fillRect(handle.x, handle.y, handleSize, handleSize)
+      ctx.beginPath()
+      ctx.arc(handle.x, handle.y, handleRadius, 0, 2 * Math.PI)
+      ctx.fill()
+      ctx.stroke()
     })
 
-    // Draw dimensions
+    // Draw dimensions (centered above)
     ctx.fillStyle = 'var(--accent)'
     ctx.font = '12px var(--font-mono)'
     const scaleX = videoDimensions.width / canvasWidth
@@ -145,7 +155,7 @@ function VideoCanvas({ videoFile, onCropChange, onZoomTimeChange, externalCropRe
     const actualHeight = Math.round(height * scaleY)
     const text = `${actualWidth}×${actualHeight}`
     const textMetrics = ctx.measureText(text)
-    ctx.fillText(text, x + width / 2 - textMetrics.width / 2, y - 10)
+    ctx.fillText(text, rx + rw / 2 - textMetrics.width / 2, ry - 10)
   }
 
   // Mouse interactions
@@ -161,7 +171,7 @@ function VideoCanvas({ videoFile, onCropChange, onZoomTimeChange, externalCropRe
   const getHandleAtPos = (x, y) => {
     if (!cropRect) return null
 
-    const handleSize = 8
+    const handleSize = 30 // Much larger hit area for easier clicking
     const handles = [
       { name: 'tl', x: cropRect.x, y: cropRect.y },
       { name: 'tr', x: cropRect.x + cropRect.width, y: cropRect.y },
@@ -177,7 +187,7 @@ function VideoCanvas({ videoFile, onCropChange, onZoomTimeChange, externalCropRe
 
     // Check if inside crop rect (for dragging)
     if (x >= cropRect.x && x <= cropRect.x + cropRect.width &&
-        y >= cropRect.y && y <= cropRect.y + cropRect.height) {
+      y >= cropRect.y && y <= cropRect.y + cropRect.height) {
       return 'move'
     }
 
@@ -205,12 +215,14 @@ function VideoCanvas({ videoFile, onCropChange, onZoomTimeChange, externalCropRe
 
     if (isDrawing) {
       const width = pos.x - dragStart.x
-      const height = pos.y - dragStart.y
+      const videoAspect = videoDimensions.width / videoDimensions.height
+      const height = Math.abs(width) / videoAspect
+
       setCropRect({
         x: width < 0 ? pos.x : dragStart.x,
-        y: height < 0 ? pos.y : dragStart.y,
+        y: (pos.y - dragStart.y) < 0 ? pos.y : dragStart.y, // Keep y anchor but ignore drag dist
         width: Math.abs(width),
-        height: Math.abs(height)
+        height: height
       })
       requestAnimationFrame(() => {
         const canvas = canvasRef.current
@@ -248,10 +260,31 @@ function VideoCanvas({ videoFile, onCropChange, onZoomTimeChange, externalCropRe
 
       // Clamp to canvas bounds
       const canvas = canvasRef.current
-      newCrop.x = Math.max(0, Math.min(newCrop.x, canvas.width - newCrop.width))
-      newCrop.y = Math.max(0, Math.min(newCrop.y, canvas.height - newCrop.height))
-      newCrop.width = Math.max(50, Math.min(newCrop.width, canvas.width - newCrop.x))
-      newCrop.height = Math.max(50, Math.min(newCrop.height, canvas.height - newCrop.y))
+      const videoAspect = videoDimensions.width / videoDimensions.height
+
+      // First clamp x/y to bounds
+      newCrop.x = Math.max(0, Math.min(newCrop.x, canvas.width - 50))
+      newCrop.y = Math.max(0, Math.min(newCrop.y, canvas.height - 50))
+
+      // Enforce aspect ratio on width/height
+      if (dragHandle === 'move') {
+        // Just moving, check bounds
+        newCrop.x = Math.max(0, Math.min(newCrop.x, canvas.width - newCrop.width))
+        newCrop.y = Math.max(0, Math.min(newCrop.y, canvas.height - newCrop.height))
+      } else {
+        // Resizing
+        // Calculate max available width based on x position
+        const maxWidth = canvas.width - newCrop.x
+
+        // Apply aspect ratio
+        newCrop.height = newCrop.width / videoAspect
+
+        // Check vertical bounds
+        if (newCrop.y + newCrop.height > canvas.height) {
+          newCrop.height = canvas.height - newCrop.y
+          newCrop.width = newCrop.height * videoAspect
+        }
+      }
 
       setCropRect(newCrop)
       setDragStart(pos)
@@ -365,11 +398,15 @@ function VideoCanvas({ videoFile, onCropChange, onZoomTimeChange, externalCropRe
   return (
     <div className="video-canvas-container">
       <video ref={videoRef} style={{ display: 'none' }} />
-      {/* STAGE 1: Crop interaction disabled */}
+      {/* STAGE 2: Crop interaction enabled */}
       <canvas
         ref={canvasRef}
         className="video-canvas"
-        style={{ cursor: 'default' }}
+        style={{ cursor: 'crosshair' }}
+        onMouseDown={handleCanvasMouseDown}
+        onMouseMove={handleCanvasMouseMove}
+        onMouseUp={handleCanvasMouseUp}
+        onMouseLeave={handleCanvasMouseUp}
       />
 
       <div className="video-controls">

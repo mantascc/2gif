@@ -25,6 +25,7 @@
   border-left: var(--border-width) solid var(--border-subtle);
   overflow-y: auto;
   padding: var(--margin-panel);
+  scrollbar-gutter: stable;
 }
 
 .timeline {

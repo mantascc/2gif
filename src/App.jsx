@@ -7,8 +7,9 @@ import './App.css'
 function App() {
   const [videoFile, setVideoFile] = useState(null)
   const [dragOver, setDragOver] = useState(false)
-  const [isExporting, setIsExporting] = useState(false)
-  const [exportProgress, setExportProgress] = useState(0)
+  const [processing, setProcessing] = useState(false)
+  const [progress, setProgress] = useState(0)
+  const [showSettings, setShowSettings] = useState(false) // Default collapsed
   const [cropRect, setCropRect] = useState(null)
   const [zoomStartTime, setZoomStartTime] = useState(null)
   const [exportSettings, setExportSettings] = useState({
@@ -63,7 +64,7 @@ function App() {
       })
 
       ffmpeg.on('progress', ({ progress }) => {
-        setExportProgress(Math.round(progress * 100))
+        setProgress(Math.round(progress * 100))
       })
 
       const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm'
@@ -93,8 +94,8 @@ function App() {
     if (!videoFile) return
 
     try {
-      setIsExporting(true)
-      setExportProgress(0)
+      setProcessing(true)
+      setProgress(0)
 
       const ffmpeg = await loadFFmpeg()
       const videoDuration = await getVideoDuration()
@@ -107,68 +108,67 @@ function App() {
 
       // STAGE 1: Crop disabled - simple export only
       // TODO: Re-enable crop in Stage 2
-      if (false && cropRect && zoomStartTime !== null && zoomStartTime > 0) {
-        console.log('Creating hard cut zoom at', zoomStartTime, 's')
-        console.log('Video duration:', videoDuration, 's')
+      // STAGE 2: Zoom/Crop Logic
+      // Single-pass complex filter to avoid concat issues
+      if (cropRect && zoomStartTime !== null && zoomStartTime > 0) {
+        console.log('Exporting with Zoom at', zoomStartTime, 's')
 
-        // Create a shared palette for consistent colors
-        const paletteFilter = `fps=${fps},scale=${width}:-1:flags=lanczos,palettegen=max_colors=${colors}`
+        // Calculate target height to maintain aspect ratio
+        const videoElement = document.createElement('video')
+        videoElement.src = URL.createObjectURL(videoFile)
+        await new Promise(r => videoElement.onloadedmetadata = r)
+        const videoAspect = videoElement.videoWidth / videoElement.videoHeight
+        const targetHeight = Math.round(width / videoAspect)
+
+        // Ensure even dimensions for ffmpeg
+        const safeWidth = width % 2 === 0 ? width : width - 1
+        const safeHeight = targetHeight % 2 === 0 ? targetHeight : targetHeight - 1
+
+        console.log(`Target Output: ${safeWidth}x${safeHeight}`)
+
+        // Construct Filter Graph:
+        // 1. Split input into [v0] and [v1]
+        // 2. [v0] (Start): trim 0-zoomTime, scale to target
+        // 3. [v1] (Zoom): trim zoomTime-end, crop, scale to target
+        // 4. [cat] Concat v0 + v1
+        // 5. Generate palette and GIF
+
+        // STAGE 2: Zoom/Crop Logic (Hard Cut)
+        // Single-pass complex filter to avoid concat issues
+
+        // Construct Filter Graph:
+        // 1. Split input into [v0] and [v1]
+        // 2. [v0] (Start): trim 0-zoomTime, scale to target
+        // 3. [v1] (Zoom): trim zoomTime-end, crop, scale to target
+        // 4. [cat] Concat v0 + v1
+
+        const filterComplex = [
+          `[0:v]split=2[v_start][v_zoom]`,
+
+          // Branch 1: Start (Normal)
+          `[v_start]trim=start=0:end=${zoomStartTime},setpts=PTS-STARTPTS,fps=${fps},scale=${safeWidth}:${safeHeight}:flags=lanczos[part1]`,
+
+          // Branch 2: Zoomed (Hard Cut)
+          `[v_zoom]trim=start=${zoomStartTime},setpts=PTS-STARTPTS,fps=${fps},crop=${cropRect.width}:${cropRect.height}:${cropRect.x}:${cropRect.y},scale=${safeWidth}:${safeHeight}:flags=lanczos[part2]`,
+
+          // Concat
+          `[part1][part2]concat=n=2:v=1:a=0[concatenated]`,
+
+          // GIF Generation
+          `[concatenated]split[s0][s1]`,
+          `[s0]palettegen=max_colors=${colors}[p]`,
+          `[s1][p]paletteuse=dither=bayer:bayer_scale=${dither}`
+        ].join(';')
+
+        console.log('Filter Graph:', filterComplex)
+
         await ffmpeg.exec([
           '-i', 'input.mp4',
-          '-vf', paletteFilter,
-          'palette.png'
-        ])
-        console.log('Palette created')
-
-        // Part 1: Full video until zoom time (as raw frames)
-        console.log('Creating part 1: 0 to', zoomStartTime)
-        const filter1 = `fps=${fps},scale=${width}:-1:flags=lanczos[v];[v][1:v]paletteuse=dither=bayer:bayer_scale=${dither}`
-        await ffmpeg.exec([
-          '-i', 'input.mp4',
-          '-i', 'palette.png',
-          '-t', zoomStartTime.toString(),
-          '-lavfi', filter1,
-          '-f', 'gif',
-          'part1.gif'
-        ])
-        console.log('Part 1 created')
-
-        // Part 2: Cropped video from zoom time to end
-        console.log('Creating part 2:', zoomStartTime, 'to end')
-        const filter2 = `crop=${cropRect.width}:${cropRect.height}:${cropRect.x}:${cropRect.y},fps=${fps},scale=${width}:-1:flags=lanczos[v];[v][1:v]paletteuse=dither=bayer:bayer_scale=${dither}`
-        await ffmpeg.exec([
-          '-i', 'input.mp4',
-          '-i', 'palette.png',
-          '-ss', zoomStartTime.toString(),
-          '-lavfi', filter2,
-          '-f', 'gif',
-          'part2.gif'
-        ])
-        console.log('Part 2 created')
-
-        // Check file sizes
-        const part1 = await ffmpeg.readFile('part1.gif')
-        const part2 = await ffmpeg.readFile('part2.gif')
-        console.log('Part 1 size:', part1.length, 'bytes')
-        console.log('Part 2 size:', part2.length, 'bytes')
-
-        // Concatenate GIFs - convert to raw frames first
-        console.log('Concatenating GIF parts')
-
-        // Extract frames from both GIFs and concat
-        await ffmpeg.exec([
-          '-i', 'part1.gif',
-          '-i', 'part2.gif',
-          '-filter_complex', '[0:v]format=rgb24[v0];[1:v]format=rgb24[v1];[v0][v1]concat=n=2:v=1:a=0,split[s0][s1];[s0]palettegen=max_colors=' + colors + '[p];[s1][p]paletteuse=dither=bayer:bayer_scale=' + dither,
+          '-filter_complex', filterComplex,
           '-loop', loop.toString(),
           'output.gif'
         ])
-        console.log('GIF concatenated')
-
-        // Cleanup
-        await ffmpeg.deleteFile('part1.gif')
-        await ffmpeg.deleteFile('part2.gif')
-        await ffmpeg.deleteFile('palette.png')
+        console.log('Export Loop Completed')
 
       } else if (false && cropRect) {
         // Static crop for entire video (DISABLED - Stage 1)
@@ -210,12 +210,12 @@ function App() {
       await ffmpeg.deleteFile('input.mp4')
       await ffmpeg.deleteFile('output.gif')
 
-      setIsExporting(false)
-      setExportProgress(0)
+      setProcessing(false)
+      setProgress(0)
     } catch (error) {
       console.error('Export failed:', error)
-      setIsExporting(false)
-      setExportProgress(0)
+      setProcessing(false)
+      setProgress(0)
       alert('Export failed. Check console for details.')
     }
   }
@@ -284,11 +284,19 @@ function App() {
                 }}>
                   {videoFile.name}
                 </p>
+                <button
+                  className="button-primary"
+                  onClick={handleExport}
+                  disabled={processing}
+                  style={{ marginTop: '12px', width: '100%' }}
+                >
+                  {processing ? `Exporting... ${progress}%` : 'Export GIF'}
+                </button>
               </div>
             </div>
 
-            {/* STAGE 1: Crop UI hidden */}
-            {false && (
+            {/* STAGE 2: Crop UI enabled */}
+            {true && (
               <div className="settings-section">
                 <h2>Crop</h2>
                 <div className="control-group">
@@ -336,7 +344,7 @@ function App() {
                       fontSize: '12px',
                       color: 'var(--text-disabled)',
                     }}>
-                      Draw on video to crop
+                      Select an area in the video to zoom in
                     </p>
                   )}
                 </div>
@@ -344,175 +352,190 @@ function App() {
             )}
 
             <div className="settings-section">
-              <h2>Export Settings</h2>
-
-              <div className="control-group">
-                <label className="control-label">Quality Preset</label>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <button
-                    style={{
-                      flex: 1,
-                      padding: '8px',
-                      backgroundColor: exportSettings.quality === 'high' ? 'var(--surface-hover)' : 'var(--surface-2)',
-                      color: 'var(--text-primary)',
-                      border: exportSettings.quality === 'high' ? '1px solid var(--accent)' : '1px solid var(--border-subtle)',
-                      borderRadius: 'var(--radius)',
-                      fontSize: '12px',
-                      fontFamily: 'var(--font-mono)',
-                    }}
-                    onClick={() => applyPreset('high')}
-                  >
-                    High
-                  </button>
-                  <button
-                    style={{
-                      flex: 1,
-                      padding: '8px',
-                      backgroundColor: exportSettings.quality === 'medium' ? 'var(--surface-hover)' : 'var(--surface-2)',
-                      color: 'var(--text-primary)',
-                      border: exportSettings.quality === 'medium' ? '1px solid var(--accent)' : '1px solid var(--border-subtle)',
-                      borderRadius: 'var(--radius)',
-                      fontSize: '12px',
-                      fontFamily: 'var(--font-mono)',
-                    }}
-                    onClick={() => applyPreset('medium')}
-                  >
-                    Medium
-                  </button>
-                  <button
-                    style={{
-                      flex: 1,
-                      padding: '8px',
-                      backgroundColor: exportSettings.quality === 'low' ? 'var(--surface-hover)' : 'var(--surface-2)',
-                      color: 'var(--text-primary)',
-                      border: exportSettings.quality === 'low' ? '1px solid var(--accent)' : '1px solid var(--border-subtle)',
-                      borderRadius: 'var(--radius)',
-                      fontSize: '12px',
-                      fontFamily: 'var(--font-mono)',
-                    }}
-                    onClick={() => applyPreset('low')}
-                  >
-                    Low
-                  </button>
-                </div>
-              </div>
-
-              <div className="control-group">
-                <label className="control-label">
-                  FPS <span style={{ color: 'var(--text-primary)' }}>{exportSettings.fps}</span>
-                </label>
-                <input
-                  type="range"
-                  min="5"
-                  max="30"
-                  step="1"
-                  value={exportSettings.fps}
-                  onChange={(e) => setExportSettings({ ...exportSettings, fps: parseInt(e.target.value), quality: 'custom' })}
-                  style={{ width: '100%' }}
-                />
-              </div>
-
-              <div className="control-group">
-                <label className="control-label">
-                  Width <span style={{ color: 'var(--text-primary)' }}>{exportSettings.width}px</span>
-                </label>
-                <input
-                  type="range"
-                  min="320"
-                  max="1200"
-                  step="40"
-                  value={exportSettings.width}
-                  onChange={(e) => setExportSettings({ ...exportSettings, width: parseInt(e.target.value), quality: 'custom' })}
-                  style={{ width: '100%' }}
-                />
-              </div>
-
-              <div className="control-group">
-                <label className="control-label">
-                  Colors <span style={{ color: 'var(--text-primary)' }}>{exportSettings.colors}</span>
-                </label>
-                <input
-                  type="range"
-                  min="32"
-                  max="256"
-                  step="32"
-                  value={exportSettings.colors}
-                  onChange={(e) => setExportSettings({ ...exportSettings, colors: parseInt(e.target.value), quality: 'custom' })}
-                  style={{ width: '100%' }}
-                />
-              </div>
-
-              <div className="control-group">
-                <label className="control-label">
-                  Dither <span style={{ color: 'var(--text-primary)' }}>{exportSettings.dither}</span>
-                </label>
-                <input
-                  type="range"
-                  min="0"
-                  max="5"
-                  step="1"
-                  value={exportSettings.dither}
-                  onChange={(e) => setExportSettings({ ...exportSettings, dither: parseInt(e.target.value), quality: 'custom' })}
-                  style={{ width: '100%' }}
-                />
-                <p style={{
-                  fontSize: '11px',
-                  color: 'var(--text-disabled)',
-                  marginTop: '4px'
-                }}>
-                  Higher = smoother gradients, larger file
-                </p>
-              </div>
-
-              <div className="control-group">
-                <label className="control-label">Loop</label>
-                <select
-                  value={exportSettings.loop}
-                  onChange={(e) => setExportSettings({ ...exportSettings, loop: parseInt(e.target.value), quality: 'custom' })}
-                  style={{
-                    width: '100%',
-                    padding: '8px 12px',
-                    backgroundColor: 'var(--surface-2)',
-                    color: 'var(--text-primary)',
-                    border: '1px solid var(--border-subtle)',
-                    borderRadius: 'var(--radius)',
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: '13px'
-                  }}
-                >
-                  <option value="0">Loop forever</option>
-                  <option value="-1">Play once</option>
-                  <option value="1">Loop 1 time</option>
-                  <option value="2">Loop 2 times</option>
-                  <option value="3">Loop 3 times</option>
-                  <option value="5">Loop 5 times</option>
-                  <option value="10">Loop 10 times</option>
-                </select>
-              </div>
-
               <button
-                className="button-primary"
-                onClick={handleExport}
-                disabled={isExporting}
-                style={{ marginTop: '16px' }}
+                onClick={() => setShowSettings(!showSettings)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  padding: 0,
+                  width: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  cursor: 'pointer',
+                  color: 'var(--text-primary)',
+                  marginBottom: showSettings ? '16px' : '0'
+                }}
               >
-                {isExporting ? `Exporting... ${exportProgress}%` : 'Export GIF'}
+                <h2 style={{ margin: 0 }}>Export Settings</h2>
+                <span style={{
+                  transform: showSettings ? 'rotate(180deg)' : 'rotate(0deg)',
+                  transition: 'transform 0.2s ease'
+                }}>
+                  ▼
+                </span>
               </button>
+
+              {showSettings && (
+                <div className="settings-content" style={{ animation: 'fadeIn 0.2s ease' }}>
+                  <div className="control-group">
+                    <label className="control-label">Quality Preset</label>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button
+                        style={{
+                          flex: 1,
+                          padding: '8px',
+                          backgroundColor: exportSettings.quality === 'high' ? 'var(--surface-hover)' : 'var(--surface-2)',
+                          color: 'var(--text-primary)',
+                          border: exportSettings.quality === 'high' ? '1px solid var(--accent)' : '1px solid var(--border-subtle)',
+                          borderRadius: 'var(--radius)',
+                          fontSize: '12px',
+                          fontFamily: 'var(--font-mono)',
+                        }}
+                        onClick={() => applyPreset('high')}
+                      >
+                        High
+                      </button>
+                      <button
+                        style={{
+                          flex: 1,
+                          padding: '8px',
+                          backgroundColor: exportSettings.quality === 'medium' ? 'var(--surface-hover)' : 'var(--surface-2)',
+                          color: 'var(--text-primary)',
+                          border: exportSettings.quality === 'medium' ? '1px solid var(--accent)' : '1px solid var(--border-subtle)',
+                          borderRadius: 'var(--radius)',
+                          fontSize: '12px',
+                          fontFamily: 'var(--font-mono)',
+                        }}
+                        onClick={() => applyPreset('medium')}
+                      >
+                        Medium
+                      </button>
+                      <button
+                        style={{
+                          flex: 1,
+                          padding: '8px',
+                          backgroundColor: exportSettings.quality === 'low' ? 'var(--surface-hover)' : 'var(--surface-2)',
+                          color: 'var(--text-primary)',
+                          border: exportSettings.quality === 'low' ? '1px solid var(--accent)' : '1px solid var(--border-subtle)',
+                          borderRadius: 'var(--radius)',
+                          fontSize: '12px',
+                          fontFamily: 'var(--font-mono)',
+                        }}
+                        onClick={() => applyPreset('low')}
+                      >
+                        Low
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="control-group">
+                    <label className="control-label">
+                      FPS <span style={{ color: 'var(--text-primary)' }}>{exportSettings.fps}</span>
+                    </label>
+                    <input
+                      type="range"
+                      min="5"
+                      max="30"
+                      step="1"
+                      value={exportSettings.fps}
+                      onChange={(e) => setExportSettings({ ...exportSettings, fps: parseInt(e.target.value), quality: 'custom' })}
+                      style={{ width: '100%' }}
+                    />
+                  </div>
+
+                  <div className="control-group">
+                    <label className="control-label">
+                      Width <span style={{ color: 'var(--text-primary)' }}>{exportSettings.width}px</span>
+                    </label>
+                    <input
+                      type="range"
+                      min="320"
+                      max="1200"
+                      step="40"
+                      value={exportSettings.width}
+                      onChange={(e) => setExportSettings({ ...exportSettings, width: parseInt(e.target.value), quality: 'custom' })}
+                      style={{ width: '100%' }}
+                    />
+                  </div>
+
+                  <div className="control-group">
+                    <label className="control-label">
+                      Colors <span style={{ color: 'var(--text-primary)' }}>{exportSettings.colors}</span>
+                    </label>
+                    <input
+                      type="range"
+                      min="32"
+                      max="256"
+                      step="32"
+                      value={exportSettings.colors}
+                      onChange={(e) => setExportSettings({ ...exportSettings, colors: parseInt(e.target.value), quality: 'custom' })}
+                      style={{ width: '100%' }}
+                    />
+                  </div>
+
+                  <div className="control-group">
+                    <label className="control-label">
+                      Dither <span style={{ color: 'var(--text-primary)' }}>{exportSettings.dither}</span>
+                    </label>
+                    <input
+                      type="range"
+                      min="0"
+                      max="5"
+                      step="1"
+                      value={exportSettings.dither}
+                      onChange={(e) => setExportSettings({ ...exportSettings, dither: parseInt(e.target.value), quality: 'custom' })}
+                      style={{ width: '100%' }}
+                    />
+                    <p style={{
+                      fontSize: '11px',
+                      color: 'var(--text-disabled)',
+                      marginTop: '4px'
+                    }}>
+                      Higher = smoother gradients, larger file
+                    </p>
+                  </div>
+
+                  <div className="control-group">
+                    <label className="control-label">Loop</label>
+                    <select
+                      value={exportSettings.loop}
+                      onChange={(e) => setExportSettings({ ...exportSettings, loop: parseInt(e.target.value), quality: 'custom' })}
+                      style={{
+                        width: '100%',
+                        padding: '8px 12px',
+                        backgroundColor: 'var(--surface-2)',
+                        color: 'var(--text-primary)',
+                        border: '1px solid var(--border-subtle)',
+                        borderRadius: 'var(--radius)',
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: '13px'
+                      }}
+                    >
+                      <option value="0">Loop forever</option>
+                      <option value="-1">Play once</option>
+                      <option value="1">Loop 1 time</option>
+                      <option value="2">Loop 2 times</option>
+                      <option value="3">Loop 3 times</option>
+                      <option value="5">Loop 5 times</option>
+                      <option value="10">Loop 10 times</option>
+                    </select>
+                  </div>
+
+
+                </div>
+              )}
+            </div>
+
+            {/* Timeline */}
+            <div className="timeline">
+              {!videoFile ? (
+                <div className="timeline-placeholder">
+                  Timeline will appear here
+                </div>
+              ) : null}
             </div>
           </>
-        )}
-      </div>
-
-      {/* Timeline */}
-      <div className="timeline">
-        {!videoFile ? (
-          <div className="timeline-placeholder">
-            Timeline will appear here
-          </div>
-        ) : (
-          <div className="timeline-placeholder">
-            Timeline controls coming soon
-          </div>
         )}
       </div>
     </div>
