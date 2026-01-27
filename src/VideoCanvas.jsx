@@ -1,0 +1,422 @@
+import { useEffect, useRef, useState } from 'react'
+import './VideoCanvas.css'
+
+function VideoCanvas({ videoFile, onCropChange, onZoomTimeChange, externalCropRect }) {
+  const canvasRef = useRef(null)
+  const videoRef = useRef(null)
+  const animationRef = useRef(null)
+
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [currentTime, setCurrentTime] = useState(0)
+  const [duration, setDuration] = useState(0)
+  const [videoDimensions, setVideoDimensions] = useState({ width: 0, height: 0 })
+
+  // Crop state
+  const [cropRect, setCropRect] = useState(null)
+  const [zoomStartTime, setZoomStartTime] = useState(null)
+  const [isDrawing, setIsDrawing] = useState(false)
+  const [isDragging, setIsDragging] = useState(false)
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 })
+  const [dragHandle, setDragHandle] = useState(null)
+
+  // Sync with external crop clear
+  useEffect(() => {
+    if (externalCropRect === null) {
+      setCropRect(null)
+      setZoomStartTime(null)
+    }
+  }, [externalCropRect])
+
+  // Initialize video
+  useEffect(() => {
+    if (!videoFile || !videoRef.current) return
+
+    const video = videoRef.current
+    const url = URL.createObjectURL(videoFile)
+    video.src = url
+
+    video.addEventListener('loadedmetadata', () => {
+      setDuration(video.duration)
+      setVideoDimensions({ width: video.videoWidth, height: video.videoHeight })
+    })
+
+    return () => {
+      URL.revokeObjectURL(url)
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current)
+      }
+    }
+  }, [videoFile])
+
+  // Render video frames to canvas
+  useEffect(() => {
+    const canvas = canvasRef.current
+    const video = videoRef.current
+    if (!canvas || !video || videoDimensions.width === 0) return
+
+    const ctx = canvas.getContext('2d')
+
+    const render = () => {
+      if (video.readyState >= 2) {
+        // Calculate canvas size to fit container while maintaining aspect ratio
+        const containerWidth = canvas.parentElement.clientWidth
+        const containerHeight = canvas.parentElement.clientHeight
+        const videoAspect = videoDimensions.width / videoDimensions.height
+        const containerAspect = containerWidth / containerHeight
+
+        let renderWidth, renderHeight
+        if (containerAspect > videoAspect) {
+          renderHeight = containerHeight
+          renderWidth = renderHeight * videoAspect
+        } else {
+          renderWidth = containerWidth
+          renderHeight = renderWidth / videoAspect
+        }
+
+        canvas.width = renderWidth
+        canvas.height = renderHeight
+
+        // Draw video
+        ctx.drawImage(video, 0, 0, renderWidth, renderHeight)
+
+        // Draw crop overlay
+        if (cropRect) {
+          drawCropOverlay(ctx, renderWidth, renderHeight)
+        }
+      }
+
+      if (isPlaying) {
+        animationRef.current = requestAnimationFrame(render)
+      }
+    }
+
+    render()
+
+    if (isPlaying) {
+      animationRef.current = requestAnimationFrame(render)
+    }
+
+    return () => {
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current)
+      }
+    }
+  }, [videoDimensions, isPlaying, cropRect])
+
+  const drawCropOverlay = (ctx, canvasWidth, canvasHeight) => {
+    if (!cropRect) return
+
+    const { x, y, width, height } = cropRect
+
+    // Darken area outside crop
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)'
+    ctx.fillRect(0, 0, canvasWidth, y)
+    ctx.fillRect(0, y, x, height)
+    ctx.fillRect(x + width, y, canvasWidth - (x + width), height)
+    ctx.fillRect(0, y + height, canvasWidth, canvasHeight - (y + height))
+
+    // Draw crop border
+    ctx.strokeStyle = 'var(--accent)'
+    ctx.lineWidth = 2
+    ctx.setLineDash([5, 5])
+    ctx.strokeRect(x, y, width, height)
+    ctx.setLineDash([])
+
+    // Draw resize handles
+    const handleSize = 8
+    const handles = [
+      { x: x - handleSize / 2, y: y - handleSize / 2 }, // top-left
+      { x: x + width - handleSize / 2, y: y - handleSize / 2 }, // top-right
+      { x: x - handleSize / 2, y: y + height - handleSize / 2 }, // bottom-left
+      { x: x + width - handleSize / 2, y: y + height - handleSize / 2 }, // bottom-right
+    ]
+
+    ctx.fillStyle = 'var(--accent)'
+    handles.forEach(handle => {
+      ctx.fillRect(handle.x, handle.y, handleSize, handleSize)
+    })
+
+    // Draw dimensions
+    ctx.fillStyle = 'var(--accent)'
+    ctx.font = '12px var(--font-mono)'
+    const scaleX = videoDimensions.width / canvasWidth
+    const scaleY = videoDimensions.height / canvasHeight
+    const actualWidth = Math.round(width * scaleX)
+    const actualHeight = Math.round(height * scaleY)
+    const text = `${actualWidth}×${actualHeight}`
+    const textMetrics = ctx.measureText(text)
+    ctx.fillText(text, x + width / 2 - textMetrics.width / 2, y - 10)
+  }
+
+  // Mouse interactions
+  const getMousePos = (e) => {
+    const canvas = canvasRef.current
+    const rect = canvas.getBoundingClientRect()
+    return {
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top
+    }
+  }
+
+  const getHandleAtPos = (x, y) => {
+    if (!cropRect) return null
+
+    const handleSize = 8
+    const handles = [
+      { name: 'tl', x: cropRect.x, y: cropRect.y },
+      { name: 'tr', x: cropRect.x + cropRect.width, y: cropRect.y },
+      { name: 'bl', x: cropRect.x, y: cropRect.y + cropRect.height },
+      { name: 'br', x: cropRect.x + cropRect.width, y: cropRect.y + cropRect.height },
+    ]
+
+    for (const handle of handles) {
+      if (Math.abs(x - handle.x) < handleSize && Math.abs(y - handle.y) < handleSize) {
+        return handle.name
+      }
+    }
+
+    // Check if inside crop rect (for dragging)
+    if (x >= cropRect.x && x <= cropRect.x + cropRect.width &&
+        y >= cropRect.y && y <= cropRect.y + cropRect.height) {
+      return 'move'
+    }
+
+    return null
+  }
+
+  const handleCanvasMouseDown = (e) => {
+    const pos = getMousePos(e)
+    const handle = getHandleAtPos(pos.x, pos.y)
+
+    if (handle) {
+      setIsDragging(true)
+      setDragHandle(handle)
+      setDragStart(pos)
+    } else {
+      // Start drawing new crop rect
+      setIsDrawing(true)
+      setDragStart(pos)
+      setCropRect({ x: pos.x, y: pos.y, width: 0, height: 0 })
+    }
+  }
+
+  const handleCanvasMouseMove = (e) => {
+    const pos = getMousePos(e)
+
+    if (isDrawing) {
+      const width = pos.x - dragStart.x
+      const height = pos.y - dragStart.y
+      setCropRect({
+        x: width < 0 ? pos.x : dragStart.x,
+        y: height < 0 ? pos.y : dragStart.y,
+        width: Math.abs(width),
+        height: Math.abs(height)
+      })
+      requestAnimationFrame(() => {
+        const canvas = canvasRef.current
+        const ctx = canvas.getContext('2d')
+        const video = videoRef.current
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+        drawCropOverlay(ctx, canvas.width, canvas.height)
+      })
+    } else if (isDragging && cropRect) {
+      const dx = pos.x - dragStart.x
+      const dy = pos.y - dragStart.y
+
+      let newCrop = { ...cropRect }
+
+      if (dragHandle === 'move') {
+        newCrop.x += dx
+        newCrop.y += dy
+      } else if (dragHandle === 'tl') {
+        newCrop.x += dx
+        newCrop.y += dy
+        newCrop.width -= dx
+        newCrop.height -= dy
+      } else if (dragHandle === 'tr') {
+        newCrop.y += dy
+        newCrop.width += dx
+        newCrop.height -= dy
+      } else if (dragHandle === 'bl') {
+        newCrop.x += dx
+        newCrop.width -= dx
+        newCrop.height += dy
+      } else if (dragHandle === 'br') {
+        newCrop.width += dx
+        newCrop.height += dy
+      }
+
+      // Clamp to canvas bounds
+      const canvas = canvasRef.current
+      newCrop.x = Math.max(0, Math.min(newCrop.x, canvas.width - newCrop.width))
+      newCrop.y = Math.max(0, Math.min(newCrop.y, canvas.height - newCrop.height))
+      newCrop.width = Math.max(50, Math.min(newCrop.width, canvas.width - newCrop.x))
+      newCrop.height = Math.max(50, Math.min(newCrop.height, canvas.height - newCrop.y))
+
+      setCropRect(newCrop)
+      setDragStart(pos)
+
+      requestAnimationFrame(() => {
+        const canvas = canvasRef.current
+        const ctx = canvas.getContext('2d')
+        const video = videoRef.current
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+        drawCropOverlay(ctx, canvas.width, canvas.height)
+      })
+    } else {
+      // Update cursor
+      const handle = getHandleAtPos(pos.x, pos.y)
+      const canvas = canvasRef.current
+      if (handle === 'move') {
+        canvas.style.cursor = 'move'
+      } else if (handle === 'tl' || handle === 'br') {
+        canvas.style.cursor = 'nwse-resize'
+      } else if (handle === 'tr' || handle === 'bl') {
+        canvas.style.cursor = 'nesw-resize'
+      } else {
+        canvas.style.cursor = 'crosshair'
+      }
+    }
+  }
+
+  const handleCanvasMouseUp = () => {
+    if (isDrawing || isDragging) {
+      // Notify parent of crop change with current time as zoom start
+      if (cropRect && onCropChange) {
+        const canvas = canvasRef.current
+        const scaleX = videoDimensions.width / canvas.width
+        const scaleY = videoDimensions.height / canvas.height
+        const newZoomTime = currentTime
+        setZoomStartTime(newZoomTime)
+        onCropChange({
+          x: Math.round(cropRect.x * scaleX),
+          y: Math.round(cropRect.y * scaleY),
+          width: Math.round(cropRect.width * scaleX),
+          height: Math.round(cropRect.height * scaleY)
+        })
+        if (onZoomTimeChange) {
+          onZoomTimeChange(newZoomTime)
+        }
+      }
+    }
+    setIsDrawing(false)
+    setIsDragging(false)
+    setDragHandle(null)
+  }
+
+  const setZoomAtCurrentTime = () => {
+    if (cropRect) {
+      const newZoomTime = currentTime
+      setZoomStartTime(newZoomTime)
+      if (onZoomTimeChange) {
+        onZoomTimeChange(newZoomTime)
+      }
+    }
+  }
+
+  // Playback controls
+  const togglePlay = () => {
+    const video = videoRef.current
+    if (!video) return
+
+    if (isPlaying) {
+      video.pause()
+    } else {
+      video.play()
+    }
+    setIsPlaying(!isPlaying)
+  }
+
+  const handleSeek = (e) => {
+    const video = videoRef.current
+    if (!video) return
+
+    const rect = e.currentTarget.getBoundingClientRect()
+    const pos = (e.clientX - rect.left) / rect.width
+    video.currentTime = pos * duration
+    setCurrentTime(video.currentTime)
+
+    // Trigger a frame render
+    const canvas = canvasRef.current
+    const ctx = canvas.getContext('2d')
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+    if (cropRect) {
+      drawCropOverlay(ctx, canvas.width, canvas.height)
+    }
+  }
+
+  // Update time
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+
+    const updateTime = () => setCurrentTime(video.currentTime)
+    video.addEventListener('timeupdate', updateTime)
+
+    return () => video.removeEventListener('timeupdate', updateTime)
+  }, [])
+
+  const formatTime = (seconds) => {
+    const mins = Math.floor(seconds / 60)
+    const secs = Math.floor(seconds % 60)
+    return `${mins}:${secs.toString().padStart(2, '0')}`
+  }
+
+  return (
+    <div className="video-canvas-container">
+      <video ref={videoRef} style={{ display: 'none' }} />
+      {/* STAGE 1: Crop interaction disabled */}
+      <canvas
+        ref={canvasRef}
+        className="video-canvas"
+        style={{ cursor: 'default' }}
+      />
+
+      <div className="video-controls">
+        <button className="control-button" onClick={togglePlay}>
+          {isPlaying ? '⏸' : '▶'}
+        </button>
+
+        <div className="timeline-scrubber" onClick={handleSeek}>
+          <div
+            className="timeline-progress"
+            style={{ width: `${(currentTime / duration) * 100}%` }}
+          />
+          {zoomStartTime !== null && (
+            <div
+              className="zoom-marker"
+              style={{
+                left: `${(zoomStartTime / duration) * 100}%`,
+                position: 'absolute',
+                top: 0,
+                width: '2px',
+                height: '100%',
+                backgroundColor: 'var(--success)',
+                pointerEvents: 'none'
+              }}
+            />
+          )}
+        </div>
+
+        {cropRect && (
+          <button
+            className="control-button"
+            onClick={setZoomAtCurrentTime}
+            title="Set zoom time at current position"
+            style={{
+              backgroundColor: zoomStartTime === currentTime ? 'var(--success)' : 'var(--surface-2)'
+            }}
+          >
+            Z
+          </button>
+        )}
+
+        <span className="time-display">
+          {formatTime(currentTime)} / {formatTime(duration)}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+export default VideoCanvas
