@@ -369,26 +369,28 @@ function App() {
                       >
                         Clear Crop
                       </button>
-                      <button
-                        style={{
-                          marginTop: '8px',
-                          marginLeft: '8px',
-                          padding: '6px 12px',
-                          backgroundColor: 'var(--surface-2)',
-                          color: 'var(--success)',
-                          border: '1px solid var(--border-subtle)',
-                          borderRadius: 'var(--radius)',
-                          fontSize: '12px',
-                          fontFamily: 'var(--font-mono)',
-                        }}
-                        onClick={() => {
-                          // Allow setting zoom end time to +2s or end
-                          const end = Math.min(trimRange[1], zoomStartTime + 2)
-                          setZoomEndTime(end)
-                        }}
-                      >
-                        Zoom 2s
-                      </button>
+                      {zoomStartTime !== null && zoomEndTime === null && (
+                        <button
+                          style={{
+                            marginTop: '8px',
+                            marginLeft: '8px',
+                            padding: '6px 12px',
+                            backgroundColor: 'var(--surface-2)',
+                            color: '#e67e22',
+                            border: '1px solid var(--border-subtle)',
+                            borderRadius: 'var(--radius)',
+                            fontSize: '12px',
+                            fontFamily: 'var(--font-mono)',
+                          }}
+                          onClick={() => {
+                            // Set zoom end time to +2s or end of trim range
+                            const end = Math.min(trimRange[1], zoomStartTime + 2)
+                            setZoomEndTime(end)
+                          }}
+                        >
+                          Add Zoom Out
+                        </button>
+                      )}
                     </>
                   ) : (
                     <p style={{
