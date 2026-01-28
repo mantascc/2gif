@@ -26,13 +26,26 @@ export default function ZoomTimeline({
     const handleMouseDown = (e, type) => {
         e.stopPropagation()
         e.preventDefault() // Prevent any default behavior
+        console.log('🎯 Zoom marker mousedown:', type, {
+            zoomTime,
+            zoomEndTime,
+            hasCallbacks: {
+                onZoomTimeChange: !!onZoomTimeChange,
+                onZoomEndTimeChange: !!onZoomEndTimeChange,
+                onSeek: !!onSeek
+            }
+        })
         setIsDragging(type)
-        console.log('🎯 Zoom marker drag started:', type)
     }
 
     useEffect(() => {
         const handleMouseMove = (e) => {
-            if (!isDragging || !duration) return
+            if (!isDragging || !duration) {
+                if (isDragging) {
+                    console.log('⚠️ Drag blocked - duration:', duration)
+                }
+                return
+            }
 
             const pct = getPercentage(e)
             const time = pct * duration
@@ -62,11 +75,17 @@ export default function ZoomTimeline({
         }
 
         if (isDragging) {
+            console.log('📌 Attaching drag listeners for:', isDragging)
             window.addEventListener('mousemove', handleMouseMove)
             window.addEventListener('mouseup', handleMouseUp)
+        } else {
+            console.log('📌 No drag active, removing listeners')
         }
 
         return () => {
+            if (isDragging) {
+                console.log('📌 Cleanup: removing drag listeners')
+            }
             window.removeEventListener('mousemove', handleMouseMove)
             window.removeEventListener('mouseup', handleMouseUp)
         }
