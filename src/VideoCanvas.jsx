@@ -1,7 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
 import './VideoCanvas.css'
 
-function VideoCanvas({ videoFile, onCropChange, onZoomTimeChange, externalCropRect }) {
+import TrimTimeline from './TrimTimeline'
+import ZoomTimeline from './ZoomTimeline'
+
+function VideoCanvas({
+  videoFile,
+  onCropChange,
+  onZoomTimeChange,
+  externalCropRect,
+  trimRange,
+  onTrimChange,
+  onDurationChange,
+  zoomTime,
+  zoomEndTime,
+  onZoomEndTimeChange
+}) {
   const canvasRef = useRef(null)
   const videoRef = useRef(null)
   const animationRef = useRef(null)
@@ -37,6 +51,7 @@ function VideoCanvas({ videoFile, onCropChange, onZoomTimeChange, externalCropRe
 
     video.addEventListener('loadedmetadata', () => {
       setDuration(video.duration)
+      onDurationChange && onDurationChange(video.duration)
       setVideoDimensions({ width: video.videoWidth, height: video.videoHeight })
     })
 
@@ -378,6 +393,21 @@ function VideoCanvas({ videoFile, onCropChange, onZoomTimeChange, externalCropRe
     }
   }
 
+  const handleTimelineSeek = (time) => {
+    const video = videoRef.current
+    if (!video) return
+    video.currentTime = time
+    setCurrentTime(time)
+
+    // Trigger a frame render
+    const canvas = canvasRef.current
+    const ctx = canvas.getContext('2d')
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+    if (cropRect) {
+      drawCropOverlay(ctx, canvas.width, canvas.height)
+    }
+  }
+
   // Update time
   useEffect(() => {
     const video = videoRef.current
@@ -410,47 +440,53 @@ function VideoCanvas({ videoFile, onCropChange, onZoomTimeChange, externalCropRe
       />
 
       <div className="video-controls">
-        <button className="control-button" onClick={togglePlay}>
-          {isPlaying ? '⏸' : '▶'}
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
+          <button className="control-button" onClick={togglePlay}>
+            {isPlaying ? '⏸' : '▶'}
+          </button>
 
-        <div className="timeline-scrubber" onClick={handleSeek}>
-          <div
-            className="timeline-progress"
-            style={{ width: `${(currentTime / duration) * 100}%` }}
-          />
-          {zoomStartTime !== null && (
-            <div
-              className="zoom-marker"
+          {cropRect && (
+            <button
+              className="control-button"
+              onClick={setZoomAtCurrentTime}
+              title="Set zoom time at current position"
               style={{
-                left: `${(zoomStartTime / duration) * 100}%`,
-                position: 'absolute',
-                top: 0,
-                width: '2px',
-                height: '100%',
-                backgroundColor: 'var(--success)',
-                pointerEvents: 'none'
+                backgroundColor: zoomStartTime === currentTime ? 'var(--success)' : 'var(--surface-2)'
               }}
-            />
+            >
+              Z
+            </button>
           )}
+
+          <span className="time-display">
+            {formatTime(currentTime)} / {formatTime(duration)}
+          </span>
         </div>
 
-        {cropRect && (
-          <button
-            className="control-button"
-            onClick={setZoomAtCurrentTime}
-            title="Set zoom time at current position"
-            style={{
-              backgroundColor: zoomStartTime === currentTime ? 'var(--success)' : 'var(--surface-2)'
-            }}
-          >
-            Z
-          </button>
-        )}
+        {/* Trim Timeline - Always visible */}
+        <TrimTimeline
+          duration={duration}
+          currentTime={currentTime}
+          trimRange={trimRange || [0, duration]}
+          onSeek={handleTimelineSeek}
+          onTrimChange={onTrimChange}
+        />
 
-        <span className="time-display">
-          {formatTime(currentTime)} / {formatTime(duration)}
-        </span>
+        {/* Zoom Timeline - Only when crop exists */}
+        <ZoomTimeline
+          duration={duration}
+          currentTime={currentTime}
+          trimRange={trimRange || [0, duration]}
+          zoomTime={zoomTime}
+          zoomEndTime={zoomEndTime}
+          hasCrop={!!cropRect}
+          onSeek={handleTimelineSeek}
+          onZoomTimeChange={(time) => {
+            setZoomStartTime(time)
+            onZoomTimeChange && onZoomTimeChange(time)
+          }}
+          onZoomEndTimeChange={onZoomEndTimeChange}
+        />
       </div>
     </div>
   )

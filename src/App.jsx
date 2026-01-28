@@ -12,6 +12,8 @@ function App() {
   const [showSettings, setShowSettings] = useState(false) // Default collapsed
   const [cropRect, setCropRect] = useState(null)
   const [zoomStartTime, setZoomStartTime] = useState(null)
+  const [zoomEndTime, setZoomEndTime] = useState(null)
+  const [trimRange, setTrimRange] = useState([0, 0]) // [start, end]
   const [exportSettings, setExportSettings] = useState({
     fps: 15,
     width: 600,
@@ -146,10 +148,10 @@ function App() {
           `[0:v]split=2[v_start][v_zoom]`,
 
           // Branch 1: Start (Normal)
-          `[v_start]trim=start=0:end=${zoomStartTime},setpts=PTS-STARTPTS,fps=${fps},scale=${safeWidth}:${safeHeight}:flags=lanczos[part1]`,
+          `[v_start]trim=start=${trimRange[0]}:end=${zoomStartTime},setpts=PTS-STARTPTS,fps=${fps},scale=${safeWidth}:${safeHeight}:flags=lanczos[part1]`,
 
           // Branch 2: Zoomed (Hard Cut)
-          `[v_zoom]trim=start=${zoomStartTime},setpts=PTS-STARTPTS,fps=${fps},crop=${cropRect.width}:${cropRect.height}:${cropRect.x}:${cropRect.y},scale=${safeWidth}:${safeHeight}:flags=lanczos[part2]`,
+          `[v_zoom]trim=start=${zoomStartTime}:end=${trimRange[1]},setpts=PTS-STARTPTS,fps=${fps},crop=${cropRect.width}:${cropRect.height}:${cropRect.x}:${cropRect.y},scale=${safeWidth}:${safeHeight}:flags=lanczos[part2]`,
 
           // Concat
           `[part1][part2]concat=n=2:v=1:a=0[concatenated]`,
@@ -182,9 +184,12 @@ function App() {
           'output.gif'
         ])
       } else {
-        // STAGE 1: Basic full video export (crop disabled)
-        const filter = `fps=${fps},scale=${width}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=${colors}[p];[s1][p]paletteuse=dither=bayer:bayer_scale=${dither}`
-        console.log('STAGE 1: Exporting full video (crop disabled)')
+        // STAGE 1: Basic full video export with trimming
+        // Recalculate duration based on trim
+        // Note: ffmpeg trim filter doesn't auto-reset PTS for duration metadata sometimes, but setpts=PTS-STARTPTS fixes the frames.
+
+        const filter = `trim=start=${trimRange[0]}:end=${trimRange[1]},setpts=PTS-STARTPTS,fps=${fps},scale=${width}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=${colors}[p];[s1][p]paletteuse=dither=bayer:bayer_scale=${dither}`
+        console.log('Exporting video with trim:', trimRange)
 
         await ffmpeg.exec([
           '-i', 'input.mp4',
@@ -257,9 +262,21 @@ function App() {
         ) : (
           <VideoCanvas
             videoFile={videoFile}
-            onCropChange={setCropRect}
+            onCropChange={(rect) => {
+              setCropRect(rect)
+              if (!rect) {
+                // Clear zoom markers if crop is cleared
+                setZoomEndTime(null)
+                setZoomStartTime(null)
+              }
+            }}
             onZoomTimeChange={setZoomStartTime}
             externalCropRect={cropRect}
+            trimRange={trimRange}
+            onTrimChange={setTrimRange}
+            zoomTime={zoomStartTime}
+            zoomEndTime={zoomEndTime}
+            onZoomEndTimeChange={setZoomEndTime}
           />
         )}
       </div>
@@ -317,7 +334,8 @@ function App() {
                           color: 'var(--success)',
                           marginTop: '4px'
                         }}>
-                          Zoom at {zoomStartTime.toFixed(1)}s
+                          Zoom at {(zoomStartTime - trimRange[0]).toFixed(1)}s
+
                         </p>
                       )}
                       <button
@@ -337,6 +355,26 @@ function App() {
                         }}
                       >
                         Clear Crop
+                      </button>
+                      <button
+                        style={{
+                          marginTop: '8px',
+                          marginLeft: '8px',
+                          padding: '6px 12px',
+                          backgroundColor: 'var(--surface-2)',
+                          color: 'var(--success)',
+                          border: '1px solid var(--border-subtle)',
+                          borderRadius: 'var(--radius)',
+                          fontSize: '12px',
+                          fontFamily: 'var(--font-mono)',
+                        }}
+                        onClick={() => {
+                          // Allow setting zoom end time to +2s or end
+                          const end = Math.min(trimRange[1], zoomStartTime + 2)
+                          setZoomEndTime(end)
+                        }}
+                      >
+                        Zoom 2s
                       </button>
                     </>
                   ) : (
@@ -527,13 +565,14 @@ function App() {
               )}
             </div>
 
-            {/* Timeline */}
-            <div className="timeline">
-              {!videoFile ? (
-                <div className="timeline-placeholder">
-                  Timeline will appear here
-                </div>
-              ) : null}
+            <div className="timeline-container" style={{ padding: '0 12px', boxSizing: 'border-box' }}>
+              {/* Timeline control is now inside VideoCanvas, but we might want to move it out later. 
+                  For now, VideoCanvas handles the rendering of the timeline. 
+                  Wait, VideoCanvas renders inside .canvas-area. 
+                  The user prompt implies we want to edit timeline. 
+                  
+                  Let's CLEANUP the old placeholder.
+              */}
             </div>
           </>
         )}
