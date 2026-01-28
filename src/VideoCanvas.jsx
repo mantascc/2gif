@@ -51,9 +51,16 @@ function VideoCanvas({
     video.src = url
 
     video.addEventListener('loadedmetadata', () => {
-      setDuration(video.duration)
-      onDurationChange && onDurationChange(video.duration)
+      const dur = video.duration
+      setDuration(dur)
+      onDurationChange && onDurationChange(dur)
       setVideoDimensions({ width: video.videoWidth, height: video.videoHeight })
+
+      // Initialize trim range if not set
+      if (!trimRange || trimRange[1] === 0) {
+        onTrimChange && onTrimChange([0, dur])
+        console.log('🎬 Initialized trim range:', [0, dur])
+      }
     })
 
     return () => {
