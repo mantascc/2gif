@@ -14,6 +14,7 @@ function App() {
   const [zoomStartTime, setZoomStartTime] = useState(null)
   const [zoomEndTime, setZoomEndTime] = useState(null)
   const [trimRange, setTrimRange] = useState([0, 0]) // [start, end]
+  const [currentTime, setCurrentTime] = useState(0)
   const [exportSettings, setExportSettings] = useState({
     fps: 15,
     width: 600,
@@ -290,6 +291,7 @@ function App() {
             zoomTime={zoomStartTime}
             zoomEndTime={zoomEndTime}
             onZoomEndTimeChange={setZoomEndTime}
+            onCurrentTimeChange={setCurrentTime}
           />
         )}
       </div>
@@ -383,9 +385,10 @@ function App() {
                             fontFamily: 'var(--font-mono)',
                           }}
                           onClick={() => {
-                            // Set zoom end time to +2s or end of trim range
-                            const end = Math.min(trimRange[1], zoomStartTime + 2)
-                            console.log('🟠 Setting zoom out:', {
+                            // Set zoom end time to current playhead position
+                            const end = Math.max(zoomStartTime + 0.5, Math.min(trimRange[1], currentTime))
+                            console.log('🟠 Setting zoom out at playhead:', {
+                              currentTime,
                               zoomStartTime,
                               zoomEndTime: end,
                               trimRange,

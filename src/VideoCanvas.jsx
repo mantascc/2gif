@@ -14,7 +14,8 @@ function VideoCanvas({
   onDurationChange,
   zoomTime,
   zoomEndTime,
-  onZoomEndTimeChange
+  onZoomEndTimeChange,
+  onCurrentTimeChange
 }) {
   const canvasRef = useRef(null)
   const videoRef = useRef(null)
@@ -383,6 +384,7 @@ function VideoCanvas({
     const pos = (e.clientX - rect.left) / rect.width
     video.currentTime = pos * duration
     setCurrentTime(video.currentTime)
+    onCurrentTimeChange && onCurrentTimeChange(video.currentTime)
 
     // Trigger a frame render
     const canvas = canvasRef.current
@@ -398,6 +400,7 @@ function VideoCanvas({
     if (!video) return
     video.currentTime = time
     setCurrentTime(time)
+    onCurrentTimeChange && onCurrentTimeChange(time)
 
     // Trigger a frame render
     const canvas = canvasRef.current
@@ -413,11 +416,15 @@ function VideoCanvas({
     const video = videoRef.current
     if (!video) return
 
-    const updateTime = () => setCurrentTime(video.currentTime)
+    const updateTime = () => {
+      const time = video.currentTime
+      setCurrentTime(time)
+      onCurrentTimeChange && onCurrentTimeChange(time)
+    }
     video.addEventListener('timeupdate', updateTime)
 
     return () => video.removeEventListener('timeupdate', updateTime)
-  }, [])
+  }, [onCurrentTimeChange])
 
   const formatTime = (seconds) => {
     const mins = Math.floor(seconds / 60)
