@@ -61,8 +61,19 @@ export default function ZoomTimeline({
                 // Clamp between zoom-in and trim end
                 const minTime = zoomTime ? zoomTime + 0.5 : trimRange[0]
                 const newTime = Math.max(Math.min(time, trimRange[1]), minTime)
-                console.log('🟠 Dragging zoom-out to:', newTime.toFixed(2))
-                onZoomEndTimeChange(newTime)
+                console.log('🟠 Dragging zoom-out to:', newTime.toFixed(2), {
+                    raw: time.toFixed(2),
+                    minTime: minTime.toFixed(2),
+                    maxTime: trimRange[1].toFixed(2),
+                    clamped: newTime.toFixed(2),
+                    currentZoomEndTime: zoomEndTime?.toFixed(2)
+                })
+                if (onZoomEndTimeChange) {
+                    console.log('📞 Calling onZoomEndTimeChange with:', newTime.toFixed(2))
+                    onZoomEndTimeChange(newTime)
+                } else {
+                    console.error('❌ onZoomEndTimeChange callback is missing!')
+                }
                 onSeek(newTime)
             }
         }

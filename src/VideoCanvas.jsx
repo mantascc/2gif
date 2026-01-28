@@ -493,7 +493,10 @@ function VideoCanvas({
             setZoomStartTime(time)
             onZoomTimeChange && onZoomTimeChange(time)
           }}
-          onZoomEndTimeChange={onZoomEndTimeChange}
+          onZoomEndTimeChange={(time) => {
+            console.log('📥 VideoCanvas received zoom end time change:', time.toFixed(2))
+            onZoomEndTimeChange && onZoomEndTimeChange(time)
+          }}
         />
       </div>
     </div>

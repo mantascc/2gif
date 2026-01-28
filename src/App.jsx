@@ -291,7 +291,10 @@ function App() {
             onTrimChange={setTrimRange}
             zoomTime={zoomStartTime}
             zoomEndTime={zoomEndTime}
-            onZoomEndTimeChange={setZoomEndTime}
+            onZoomEndTimeChange={(time) => {
+              console.log('📥 App.jsx setting zoom end time:', time.toFixed(2), 'current:', zoomEndTime?.toFixed(2))
+              setZoomEndTime(time)
+            }}
             onCurrentTimeChange={setCurrentTime}
           />
         )}
