@@ -279,10 +279,11 @@ function App() {
             onCropChange={(rect) => {
               setCropRect(rect)
               if (!rect) {
-                // Clear zoom markers if crop is cleared
+                // Clear zoom markers only when "Clear Crop" is clicked
                 setZoomEndTime(null)
                 setZoomStartTime(null)
               }
+              // Note: zoom in marker is set by VideoCanvas via onZoomTimeChange
             }}
             onZoomTimeChange={setZoomStartTime}
             externalCropRect={cropRect}

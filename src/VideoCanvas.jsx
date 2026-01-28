@@ -337,6 +337,7 @@ function VideoCanvas({
         const scaleY = videoDimensions.height / canvas.height
         const newZoomTime = currentTime
         setZoomStartTime(newZoomTime)
+        console.log('🟢 Crop edited - updating zoom in marker to playhead:', newZoomTime.toFixed(2))
         onCropChange({
           x: Math.round(cropRect.x * scaleX),
           y: Math.round(cropRect.y * scaleY),
