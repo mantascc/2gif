@@ -23,7 +23,9 @@ export default function ZoomTimeline({
 
     const handleMouseDown = (e, type) => {
         e.stopPropagation()
+        e.preventDefault() // Prevent any default behavior
         setIsDragging(type)
+        console.log('🎯 Zoom marker drag started:', type)
     }
 
     useEffect(() => {
@@ -37,18 +39,23 @@ export default function ZoomTimeline({
                 // Clamp between trim start and zoom-out (or trim end)
                 const maxTime = zoomEndTime ? zoomEndTime - 0.5 : trimRange[1]
                 const newTime = Math.min(Math.max(time, trimRange[0]), maxTime)
+                console.log('🟢 Dragging zoom-in to:', newTime.toFixed(2))
                 onZoomTimeChange(newTime)
                 onSeek(newTime)
             } else if (isDragging === 'zoom-out') {
                 // Clamp between zoom-in and trim end
                 const minTime = zoomTime ? zoomTime + 0.5 : trimRange[0]
                 const newTime = Math.max(Math.min(time, trimRange[1]), minTime)
+                console.log('🟠 Dragging zoom-out to:', newTime.toFixed(2))
                 onZoomEndTimeChange(newTime)
                 onSeek(newTime)
             }
         }
 
         const handleMouseUp = () => {
+            if (isDragging) {
+                console.log('✋ Zoom marker drag ended:', isDragging)
+            }
             setIsDragging(null)
         }
 
