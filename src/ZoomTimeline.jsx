@@ -13,10 +13,12 @@ export default function ZoomTimeline({
     hasCrop
 }) {
     const containerRef = useRef(null)
+    const trackRef = useRef(null)
     const [isDragging, setIsDragging] = useState(null) // 'zoom-in', 'zoom-out'
 
     const getPercentage = (e) => {
-        const rect = containerRef.current.getBoundingClientRect()
+        if (!trackRef.current) return 0
+        const rect = trackRef.current.getBoundingClientRect()
         const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width))
         return x / rect.width
     }
@@ -71,9 +73,9 @@ export default function ZoomTimeline({
     }, [isDragging, duration, trimRange, zoomTime, zoomEndTime, onSeek, onZoomTimeChange, onZoomEndTimeChange])
 
     const handleTrackClick = (e) => {
-        if (isDragging) return
+        if (isDragging || !trackRef.current) return
 
-        const rect = containerRef.current.getBoundingClientRect()
+        const rect = trackRef.current.getBoundingClientRect()
         const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width))
         const pct = x / rect.width
         onSeek(pct * duration)
@@ -99,13 +101,13 @@ export default function ZoomTimeline({
                 className="zoom-timeline-control"
                 ref={containerRef}
                 onMouseDown={(e) => {
-                    if (e.target === containerRef.current ||
+                    if (e.target === trackRef.current ||
                         e.target.classList.contains('zoom-timeline-track')) {
                         handleTrackClick(e)
                     }
                 }}
             >
-                <div className="zoom-timeline-track">
+                <div className="zoom-timeline-track" ref={trackRef}>
                     {/* Trimmed region reference (subtle) */}
                     <div
                         className="zoom-trim-reference"

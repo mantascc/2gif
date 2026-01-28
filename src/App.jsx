@@ -385,6 +385,12 @@ function App() {
                           onClick={() => {
                             // Set zoom end time to +2s or end of trim range
                             const end = Math.min(trimRange[1], zoomStartTime + 2)
+                            console.log('🟠 Setting zoom out:', {
+                              zoomStartTime,
+                              zoomEndTime: end,
+                              trimRange,
+                              duration: end - zoomStartTime
+                            })
                             setZoomEndTime(end)
                           }}
                         >

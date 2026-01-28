@@ -9,10 +9,12 @@ export default function TrimTimeline({
     onTrimChange
 }) {
     const containerRef = useRef(null)
+    const trackRef = useRef(null)
     const [isDragging, setIsDragging] = useState(null) // 'scrubber', 'start', 'end'
 
     const getPercentage = (e) => {
-        const rect = containerRef.current.getBoundingClientRect()
+        if (!trackRef.current) return 0
+        const rect = trackRef.current.getBoundingClientRect()
         const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width))
         return x / rect.width
     }
@@ -58,9 +60,9 @@ export default function TrimTimeline({
     }, [isDragging, duration, trimRange, onSeek, onTrimChange])
 
     const handleTrackClick = (e) => {
-        if (isDragging) return
+        if (isDragging || !trackRef.current) return
 
-        const rect = containerRef.current.getBoundingClientRect()
+        const rect = trackRef.current.getBoundingClientRect()
         const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width))
         const pct = x / rect.width
         onSeek(pct * duration)
@@ -75,14 +77,14 @@ export default function TrimTimeline({
                 className="trim-timeline-control"
                 ref={containerRef}
                 onMouseDown={(e) => {
-                    if (e.target === containerRef.current ||
+                    if (e.target === trackRef.current ||
                         e.target.classList.contains('trim-timeline-track') ||
                         e.target.classList.contains('trim-active-region')) {
                         handleTrackClick(e)
                     }
                 }}
             >
-                <div className="trim-timeline-track">
+                <div className="trim-timeline-track" ref={trackRef}>
                     {/* Active Region (Trimmed) */}
                     <div
                         className="trim-active-region"
