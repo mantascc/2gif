@@ -51,15 +51,15 @@ export default function ZoomTimeline({
             const time = pct * duration
 
             if (isDragging === 'zoom-in') {
-                // Clamp between trim start and zoom-out (or trim end)
-                const maxTime = zoomEndTime ? zoomEndTime - 0.5 : trimRange[1]
+                // Clamp between trim start and zoom-out (0.1s minimum gap)
+                const maxTime = zoomEndTime ? zoomEndTime - 0.1 : trimRange[1]
                 const newTime = Math.min(Math.max(time, trimRange[0]), maxTime)
                 console.log('🟢 Dragging zoom-in to:', newTime.toFixed(2))
                 onZoomTimeChange(newTime)
                 onSeek(newTime)
             } else if (isDragging === 'zoom-out') {
-                // Clamp between zoom-in and trim end
-                const minTime = zoomTime ? zoomTime + 0.5 : trimRange[0]
+                // Clamp between zoom-in and trim end (0.1s minimum gap)
+                const minTime = zoomTime ? zoomTime + 0.1 : trimRange[0]
                 const newTime = Math.max(Math.min(time, trimRange[1]), minTime)
                 console.log('🟠 Dragging zoom-out to:', newTime.toFixed(2), {
                     raw: time.toFixed(2),
