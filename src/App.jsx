@@ -108,12 +108,9 @@ function App() {
       // Build filter string based on settings
       const { fps, width, colors, dither, loop } = exportSettings
 
-      // STAGE 1: Crop disabled - simple export only
-      // TODO: Re-enable crop in Stage 2
-      // STAGE 2: Zoom/Crop Logic
-      // Single-pass complex filter to avoid concat issues
+      // STAGE 2: Zoom/Crop Logic with Zoom In/Out support
       if (cropRect && zoomStartTime !== null && zoomStartTime > 0) {
-        console.log('Exporting with Zoom at', zoomStartTime, 's')
+        console.log('Exporting with Zoom:', { zoomStartTime, zoomEndTime })
 
         // Calculate target height to maintain aspect ratio
         const videoElement = document.createElement('video')
@@ -128,39 +125,55 @@ function App() {
 
         console.log(`Target Output: ${safeWidth}x${safeHeight}`)
 
-        // Construct Filter Graph:
-        // 1. Split input into [v0] and [v1]
-        // 2. [v0] (Start): trim 0-zoomTime, scale to target
-        // 3. [v1] (Zoom): trim zoomTime-end, crop, scale to target
-        // 4. [cat] Concat v0 + v1
-        // 5. Generate palette and GIF
+        let filterComplex
 
-        // STAGE 2: Zoom/Crop Logic (Hard Cut)
-        // Single-pass complex filter to avoid concat issues
+        if (zoomEndTime !== null && zoomEndTime > zoomStartTime) {
+          // 3-PART: Normal → Zoomed → Zoom Out
+          console.log('3-part export: Normal → Zoomed → Zoom Out')
 
-        // Construct Filter Graph:
-        // 1. Split input into [v0] and [v1]
-        // 2. [v0] (Start): trim 0-zoomTime, scale to target
-        // 3. [v1] (Zoom): trim zoomTime-end, crop, scale to target
-        // 4. [cat] Concat v0 + v1
+          filterComplex = [
+            // Split into 3 streams
+            `[0:v]split=3[v_start][v_zoom][v_end]`,
 
-        const filterComplex = [
-          `[0:v]split=2[v_start][v_zoom]`,
+            // Part 1: Normal (before zoom)
+            `[v_start]trim=start=${trimRange[0]}:end=${zoomStartTime},setpts=PTS-STARTPTS,fps=${fps},scale=${safeWidth}:${safeHeight}:flags=lanczos[part1]`,
 
-          // Branch 1: Start (Normal)
-          `[v_start]trim=start=${trimRange[0]}:end=${zoomStartTime},setpts=PTS-STARTPTS,fps=${fps},scale=${safeWidth}:${safeHeight}:flags=lanczos[part1]`,
+            // Part 2: Zoomed (during zoom)
+            `[v_zoom]trim=start=${zoomStartTime}:end=${zoomEndTime},setpts=PTS-STARTPTS,fps=${fps},crop=${cropRect.width}:${cropRect.height}:${cropRect.x}:${cropRect.y},scale=${safeWidth}:${safeHeight}:flags=lanczos[part2]`,
 
-          // Branch 2: Zoomed (Hard Cut)
-          `[v_zoom]trim=start=${zoomStartTime}:end=${trimRange[1]},setpts=PTS-STARTPTS,fps=${fps},crop=${cropRect.width}:${cropRect.height}:${cropRect.x}:${cropRect.y},scale=${safeWidth}:${safeHeight}:flags=lanczos[part2]`,
+            // Part 3: Normal (after zoom out)
+            `[v_end]trim=start=${zoomEndTime}:end=${trimRange[1]},setpts=PTS-STARTPTS,fps=${fps},scale=${safeWidth}:${safeHeight}:flags=lanczos[part3]`,
 
-          // Concat
-          `[part1][part2]concat=n=2:v=1:a=0[concatenated]`,
+            // Concat all 3 parts
+            `[part1][part2][part3]concat=n=3:v=1:a=0[concatenated]`,
 
-          // GIF Generation
-          `[concatenated]split[s0][s1]`,
-          `[s0]palettegen=max_colors=${colors}[p]`,
-          `[s1][p]paletteuse=dither=bayer:bayer_scale=${dither}`
-        ].join(';')
+            // GIF Generation
+            `[concatenated]split[s0][s1]`,
+            `[s0]palettegen=max_colors=${colors}[p]`,
+            `[s1][p]paletteuse=dither=bayer:bayer_scale=${dither}`
+          ].join(';')
+        } else {
+          // 2-PART: Normal → Zoomed (no zoom out)
+          console.log('2-part export: Normal → Zoomed')
+
+          filterComplex = [
+            `[0:v]split=2[v_start][v_zoom]`,
+
+            // Part 1: Normal (before zoom)
+            `[v_start]trim=start=${trimRange[0]}:end=${zoomStartTime},setpts=PTS-STARTPTS,fps=${fps},scale=${safeWidth}:${safeHeight}:flags=lanczos[part1]`,
+
+            // Part 2: Zoomed (stays zoomed)
+            `[v_zoom]trim=start=${zoomStartTime}:end=${trimRange[1]},setpts=PTS-STARTPTS,fps=${fps},crop=${cropRect.width}:${cropRect.height}:${cropRect.x}:${cropRect.y},scale=${safeWidth}:${safeHeight}:flags=lanczos[part2]`,
+
+            // Concat
+            `[part1][part2]concat=n=2:v=1:a=0[concatenated]`,
+
+            // GIF Generation
+            `[concatenated]split[s0][s1]`,
+            `[s0]palettegen=max_colors=${colors}[p]`,
+            `[s1][p]paletteuse=dither=bayer:bayer_scale=${dither}`
+          ].join(';')
+        }
 
         console.log('Filter Graph:', filterComplex)
 
@@ -170,7 +183,7 @@ function App() {
           '-loop', loop.toString(),
           'output.gif'
         ])
-        console.log('Export Loop Completed')
+        console.log('Export complete')
 
       } else if (false && cropRect) {
         // Static crop for entire video (DISABLED - Stage 1)
