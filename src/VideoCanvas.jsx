@@ -59,7 +59,6 @@ function VideoCanvas({
       // Initialize trim range if not set
       if (!trimRange || trimRange[1] === 0) {
         onTrimChange && onTrimChange([0, dur])
-        console.log('🎬 Initialized trim range:', [0, dur])
       }
     })
 
@@ -125,6 +124,18 @@ function VideoCanvas({
       }
     }
   }, [videoDimensions, isPlaying, cropRect])
+
+  const renderFrame = () => {
+    const canvas = canvasRef.current
+    const video = videoRef.current
+    const ctx = canvas?.getContext('2d')
+    if (!canvas || !video || !ctx) return
+
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+    if (cropRect) {
+      drawCropOverlay(ctx, canvas.width, canvas.height)
+    }
+  }
 
   const drawCropOverlay = (ctx, canvasWidth, canvasHeight) => {
     if (!cropRect) return
@@ -247,13 +258,7 @@ function VideoCanvas({
         width: Math.abs(width),
         height: height
       })
-      requestAnimationFrame(() => {
-        const canvas = canvasRef.current
-        const ctx = canvas.getContext('2d')
-        const video = videoRef.current
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-        drawCropOverlay(ctx, canvas.width, canvas.height)
-      })
+      requestAnimationFrame(renderFrame)
     } else if (isDragging && cropRect) {
       const dx = pos.x - dragStart.x
       const dy = pos.y - dragStart.y
@@ -312,13 +317,7 @@ function VideoCanvas({
       setCropRect(newCrop)
       setDragStart(pos)
 
-      requestAnimationFrame(() => {
-        const canvas = canvasRef.current
-        const ctx = canvas.getContext('2d')
-        const video = videoRef.current
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-        drawCropOverlay(ctx, canvas.width, canvas.height)
-      })
+      requestAnimationFrame(renderFrame)
     } else {
       // Update cursor
       const handle = getHandleAtPos(pos.x, pos.y)
@@ -344,7 +343,6 @@ function VideoCanvas({
         const scaleY = videoDimensions.height / canvas.height
         const newZoomTime = currentTime
         setZoomStartTime(newZoomTime)
-        console.log('🟢 Crop edited - updating zoom in marker to playhead:', newZoomTime.toFixed(2))
         onCropChange({
           x: Math.round(cropRect.x * scaleX),
           y: Math.round(cropRect.y * scaleY),
@@ -394,13 +392,7 @@ function VideoCanvas({
     setCurrentTime(video.currentTime)
     onCurrentTimeChange && onCurrentTimeChange(video.currentTime)
 
-    // Trigger a frame render
-    const canvas = canvasRef.current
-    const ctx = canvas.getContext('2d')
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-    if (cropRect) {
-      drawCropOverlay(ctx, canvas.width, canvas.height)
-    }
+    renderFrame()
   }
 
   const handleTimelineSeek = (time) => {
@@ -410,13 +402,7 @@ function VideoCanvas({
     setCurrentTime(time)
     onCurrentTimeChange && onCurrentTimeChange(time)
 
-    // Trigger a frame render
-    const canvas = canvasRef.current
-    const ctx = canvas.getContext('2d')
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-    if (cropRect) {
-      drawCropOverlay(ctx, canvas.width, canvas.height)
-    }
+    renderFrame()
   }
 
   // Update time
@@ -460,19 +446,6 @@ function VideoCanvas({
             {isPlaying ? '⏸' : '▶'}
           </button>
 
-          {cropRect && (
-            <button
-              className="control-button"
-              onClick={setZoomAtCurrentTime}
-              title="Set zoom time at current position"
-              style={{
-                backgroundColor: zoomStartTime === currentTime ? 'var(--success)' : 'var(--surface-2)'
-              }}
-            >
-              Z
-            </button>
-          )}
-
           <span className="time-display">
             {formatTime(currentTime)} / {formatTime(duration)}
           </span>
@@ -500,10 +473,7 @@ function VideoCanvas({
             setZoomStartTime(time)
             onZoomTimeChange && onZoomTimeChange(time)
           }}
-          onZoomEndTimeChange={(time) => {
-            console.log('📥 VideoCanvas received zoom end time change:', time.toFixed(2))
-            onZoomEndTimeChange && onZoomEndTimeChange(time)
-          }}
+          onZoomEndTimeChange={onZoomEndTimeChange}
         />
       </div>
     </div>

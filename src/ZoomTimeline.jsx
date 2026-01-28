@@ -25,27 +25,13 @@ export default function ZoomTimeline({
 
     const handleMouseDown = (e, type) => {
         e.stopPropagation()
-        e.preventDefault() // Prevent any default behavior
-        console.log('🎯 Zoom marker mousedown:', type, {
-            zoomTime,
-            zoomEndTime,
-            hasCallbacks: {
-                onZoomTimeChange: !!onZoomTimeChange,
-                onZoomEndTimeChange: !!onZoomEndTimeChange,
-                onSeek: !!onSeek
-            }
-        })
+        e.preventDefault()
         setIsDragging(type)
     }
 
     useEffect(() => {
         const handleMouseMove = (e) => {
-            if (!isDragging || !duration) {
-                if (isDragging) {
-                    console.log('⚠️ Drag blocked - duration:', duration)
-                }
-                return
-            }
+            if (!isDragging || !duration) return
 
             const pct = getPercentage(e)
             const time = pct * duration
@@ -54,43 +40,27 @@ export default function ZoomTimeline({
                 // Clamp between trim start and zoom-out (0.1s minimum gap)
                 const maxTime = zoomEndTime ? zoomEndTime - 0.1 : trimRange[1]
                 const newTime = Math.min(Math.max(time, trimRange[0]), maxTime)
-                console.log('🟢 Dragging zoom-in to:', newTime.toFixed(2))
                 onZoomTimeChange(newTime)
                 onSeek(newTime)
             } else if (isDragging === 'zoom-out') {
                 // Clamp between zoom-in and trim end (0.1s minimum gap)
                 const minTime = zoomTime ? zoomTime + 0.1 : trimRange[0]
                 const newTime = Math.max(Math.min(time, trimRange[1]), minTime)
-                console.log(`🟠 Zoom-out drag: RAW=${time.toFixed(2)}s | MIN=${minTime.toFixed(2)}s (green+0.1) | MAX=${trimRange[1].toFixed(2)}s | RESULT=${newTime.toFixed(2)}s | GREEN=${zoomTime?.toFixed(2)}s`)
-                if (onZoomEndTimeChange) {
-                    console.log('📞 Calling onZoomEndTimeChange with:', newTime.toFixed(2))
-                    onZoomEndTimeChange(newTime)
-                } else {
-                    console.error('❌ onZoomEndTimeChange callback is missing!')
-                }
+                onZoomEndTimeChange(newTime)
                 onSeek(newTime)
             }
         }
 
         const handleMouseUp = () => {
-            if (isDragging) {
-                console.log('✋ Zoom marker drag ended:', isDragging)
-            }
             setIsDragging(null)
         }
 
         if (isDragging) {
-            console.log('📌 Attaching drag listeners for:', isDragging)
             window.addEventListener('mousemove', handleMouseMove)
             window.addEventListener('mouseup', handleMouseUp)
-        } else {
-            console.log('📌 No drag active, removing listeners')
         }
 
         return () => {
-            if (isDragging) {
-                console.log('📌 Cleanup: removing drag listeners')
-            }
             window.removeEventListener('mousemove', handleMouseMove)
             window.removeEventListener('mouseup', handleMouseUp)
         }
@@ -160,7 +130,7 @@ export default function ZoomTimeline({
                             onMouseDown={(e) => handleMouseDown(e, 'zoom-in')}
                             title="Zoom In Start"
                         >
-                            <div className="marker-icon">▶</div>
+                            <div className="marker-icon"></div>
                             <div className="marker-line" />
                         </div>
                     )}
@@ -173,7 +143,7 @@ export default function ZoomTimeline({
                             onMouseDown={(e) => handleMouseDown(e, 'zoom-out')}
                             title="Zoom Out/Reset"
                         >
-                            <div className="marker-icon">◀</div>
+                            <div className="marker-icon"></div>
                             <div className="marker-line" />
                         </div>
                     )}

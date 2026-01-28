@@ -2,6 +2,7 @@ import { useState, useRef } from 'react'
 import { FFmpeg } from '@ffmpeg/ffmpeg'
 import { fetchFile, toBlobURL } from '@ffmpeg/util'
 import VideoCanvas from './VideoCanvas'
+import { buildThreePartFilter, buildTwoPartFilter, buildSimpleFilter } from './utils/ffmpegFilters'
 import './App.css'
 
 function App() {
@@ -9,7 +10,7 @@ function App() {
   const [dragOver, setDragOver] = useState(false)
   const [processing, setProcessing] = useState(false)
   const [progress, setProgress] = useState(0)
-  const [showSettings, setShowSettings] = useState(false) // Default collapsed
+  const [showSettings, setShowSettings] = useState(false)
   const [cropRect, setCropRect] = useState(null)
   const [zoomStartTime, setZoomStartTime] = useState(null)
   const [zoomEndTime, setZoomEndTime] = useState(null)
@@ -25,7 +26,6 @@ function App() {
   })
   const fileInputRef = useRef(null)
   const ffmpegRef = useRef(null)
-  const videoMetadataRef = useRef({ duration: 0 })
 
   const handleDragOver = (e) => {
     e.preventDefault()
@@ -63,7 +63,7 @@ function App() {
       const ffmpeg = new FFmpeg()
 
       ffmpeg.on('log', ({ message }) => {
-        console.log(message)
+        // FFmpeg internal logging (no output)
       })
 
       ffmpeg.on('progress', ({ progress }) => {
@@ -111,8 +111,6 @@ function App() {
 
       // STAGE 2: Zoom/Crop Logic with Zoom In/Out support
       if (cropRect && zoomStartTime !== null && zoomStartTime > 0) {
-        console.log('Exporting with Zoom:', { zoomStartTime, zoomEndTime })
-
         // Calculate target height to maintain aspect ratio
         const videoElement = document.createElement('video')
         videoElement.src = URL.createObjectURL(videoFile)
@@ -124,59 +122,34 @@ function App() {
         const safeWidth = width % 2 === 0 ? width : width - 1
         const safeHeight = targetHeight % 2 === 0 ? targetHeight : targetHeight - 1
 
-        console.log(`Target Output: ${safeWidth}x${safeHeight}`)
-
         let filterComplex
 
         if (zoomEndTime !== null && zoomEndTime > zoomStartTime) {
           // 3-PART: Normal → Zoomed → Zoom Out
-          console.log('3-part export: Normal → Zoomed → Zoom Out')
-
-          filterComplex = [
-            // Split into 3 streams
-            `[0:v]split=3[v_start][v_zoom][v_end]`,
-
-            // Part 1: Normal (before zoom)
-            `[v_start]trim=start=${trimRange[0]}:end=${zoomStartTime},setpts=PTS-STARTPTS,fps=${fps},scale=${safeWidth}:${safeHeight}:flags=lanczos[part1]`,
-
-            // Part 2: Zoomed (during zoom)
-            `[v_zoom]trim=start=${zoomStartTime}:end=${zoomEndTime},setpts=PTS-STARTPTS,fps=${fps},crop=${cropRect.width}:${cropRect.height}:${cropRect.x}:${cropRect.y},scale=${safeWidth}:${safeHeight}:flags=lanczos[part2]`,
-
-            // Part 3: Normal (after zoom out)
-            `[v_end]trim=start=${zoomEndTime}:end=${trimRange[1]},setpts=PTS-STARTPTS,fps=${fps},scale=${safeWidth}:${safeHeight}:flags=lanczos[part3]`,
-
-            // Concat all 3 parts
-            `[part1][part2][part3]concat=n=3:v=1:a=0[concatenated]`,
-
-            // GIF Generation
-            `[concatenated]split[s0][s1]`,
-            `[s0]palettegen=max_colors=${colors}[p]`,
-            `[s1][p]paletteuse=dither=bayer:bayer_scale=${dither}`
-          ].join(';')
+          filterComplex = buildThreePartFilter(
+            trimRange,
+            zoomStartTime,
+            zoomEndTime,
+            cropRect,
+            fps,
+            safeWidth,
+            safeHeight,
+            colors,
+            dither
+          )
         } else {
           // 2-PART: Normal → Zoomed (no zoom out)
-          console.log('2-part export: Normal → Zoomed')
-
-          filterComplex = [
-            `[0:v]split=2[v_start][v_zoom]`,
-
-            // Part 1: Normal (before zoom)
-            `[v_start]trim=start=${trimRange[0]}:end=${zoomStartTime},setpts=PTS-STARTPTS,fps=${fps},scale=${safeWidth}:${safeHeight}:flags=lanczos[part1]`,
-
-            // Part 2: Zoomed (stays zoomed)
-            `[v_zoom]trim=start=${zoomStartTime}:end=${trimRange[1]},setpts=PTS-STARTPTS,fps=${fps},crop=${cropRect.width}:${cropRect.height}:${cropRect.x}:${cropRect.y},scale=${safeWidth}:${safeHeight}:flags=lanczos[part2]`,
-
-            // Concat
-            `[part1][part2]concat=n=2:v=1:a=0[concatenated]`,
-
-            // GIF Generation
-            `[concatenated]split[s0][s1]`,
-            `[s0]palettegen=max_colors=${colors}[p]`,
-            `[s1][p]paletteuse=dither=bayer:bayer_scale=${dither}`
-          ].join(';')
+          filterComplex = buildTwoPartFilter(
+            trimRange,
+            zoomStartTime,
+            cropRect,
+            fps,
+            safeWidth,
+            safeHeight,
+            colors,
+            dither
+          )
         }
-
-        console.log('Filter Graph:', filterComplex)
 
         await ffmpeg.exec([
           '-i', 'input.mp4',
@@ -184,26 +157,9 @@ function App() {
           '-loop', loop.toString(),
           'output.gif'
         ])
-        console.log('Export complete')
-
-      } else if (false && cropRect) {
-        // Static crop for entire video (DISABLED - Stage 1)
-        const filter = `crop=${cropRect.width}:${cropRect.height}:${cropRect.x}:${cropRect.y},fps=${fps},scale=${width}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=${colors}[p];[s1][p]paletteuse=dither=bayer:bayer_scale=${dither}`
-        console.log('Exporting with crop:', cropRect)
-
-        await ffmpeg.exec([
-          '-i', 'input.mp4',
-          '-vf', filter,
-          '-loop', loop.toString(),
-          'output.gif'
-        ])
       } else {
         // STAGE 1: Basic full video export with trimming
-        // Recalculate duration based on trim
-        // Note: ffmpeg trim filter doesn't auto-reset PTS for duration metadata sometimes, but setpts=PTS-STARTPTS fixes the frames.
-
-        const filter = `trim=start=${trimRange[0]}:end=${trimRange[1]},setpts=PTS-STARTPTS,fps=${fps},scale=${width}:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=${colors}[p];[s1][p]paletteuse=dither=bayer:bayer_scale=${dither}`
-        console.log('Exporting video with trim:', trimRange)
+        const filter = buildSimpleFilter(trimRange, fps, width, colors, dither)
 
         await ffmpeg.exec([
           '-i', 'input.mp4',
@@ -291,10 +247,7 @@ function App() {
             onTrimChange={setTrimRange}
             zoomTime={zoomStartTime}
             zoomEndTime={zoomEndTime}
-            onZoomEndTimeChange={(time) => {
-              console.log('📥 App.jsx setting zoom end time:', time.toFixed(2), 'current:', zoomEndTime?.toFixed(2))
-              setZoomEndTime(time)
-            }}
+            onZoomEndTimeChange={setZoomEndTime}
             onCurrentTimeChange={setCurrentTime}
           />
         )}
@@ -331,10 +284,9 @@ function App() {
               </div>
             </div>
 
-            {/* STAGE 2: Crop UI enabled */}
-            {true && (
-              <div className="settings-section">
-                <h2>Crop</h2>
+            {/* STAGE 2: Zoom UI */}
+            <div className="settings-section">
+                <h2>Zoom</h2>
                 <div className="control-group">
                   {cropRect ? (
                     <>
@@ -353,8 +305,17 @@ function App() {
                           color: 'var(--success)',
                           marginTop: '4px'
                         }}>
-                          Zoom at {(zoomStartTime - trimRange[0]).toFixed(1)}s
-
+                          Zoom-in at {(zoomStartTime - trimRange[0]).toFixed(1)}s
+                        </p>
+                      )}
+                      {zoomEndTime !== null && (
+                        <p style={{
+                          fontSize: '12px',
+                          fontFamily: 'var(--font-mono)',
+                          color: '#e67e22',
+                          marginTop: '4px'
+                        }}>
+                          Zoom-out at {(zoomEndTime - trimRange[0]).toFixed(1)}s
                         </p>
                       )}
                       <button
@@ -373,7 +334,7 @@ function App() {
                           setZoomStartTime(null)
                         }}
                       >
-                        Clear Crop
+                        Clear Zoom
                       </button>
                       {zoomStartTime !== null && zoomEndTime === null && (
                         <button
@@ -389,15 +350,7 @@ function App() {
                             fontFamily: 'var(--font-mono)',
                           }}
                           onClick={() => {
-                            // Set zoom end time to current playhead position
                             const end = Math.max(zoomStartTime + 0.5, Math.min(trimRange[1], currentTime))
-                            console.log('🟠 Setting zoom out at playhead:', {
-                              currentTime,
-                              zoomStartTime,
-                              zoomEndTime: end,
-                              trimRange,
-                              duration: end - zoomStartTime
-                            })
                             setZoomEndTime(end)
                           }}
                         >
@@ -415,7 +368,6 @@ function App() {
                   )}
                 </div>
               </div>
-            )}
 
             <div className="settings-section">
               <button
@@ -591,16 +543,6 @@ function App() {
 
                 </div>
               )}
-            </div>
-
-            <div className="timeline-container" style={{ padding: '0 12px', boxSizing: 'border-box' }}>
-              {/* Timeline control is now inside VideoCanvas, but we might want to move it out later. 
-                  For now, VideoCanvas handles the rendering of the timeline. 
-                  Wait, VideoCanvas renders inside .canvas-area. 
-                  The user prompt implies we want to edit timeline. 
-                  
-                  Let's CLEANUP the old placeholder.
-              */}
             </div>
           </>
         )}
