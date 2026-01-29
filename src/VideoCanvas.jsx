@@ -336,21 +336,25 @@ function VideoCanvas({
 
   const handleCanvasMouseUp = () => {
     if (isDrawing || isDragging) {
-      // Notify parent of crop change with current time as zoom start
       if (cropRect && onCropChange) {
         const canvas = canvasRef.current
         const scaleX = videoDimensions.width / canvas.width
         const scaleY = videoDimensions.height / canvas.height
-        const newZoomTime = currentTime
-        setZoomStartTime(newZoomTime)
+
         onCropChange({
           x: Math.round(cropRect.x * scaleX),
           y: Math.round(cropRect.y * scaleY),
           width: Math.round(cropRect.width * scaleX),
           height: Math.round(cropRect.height * scaleY)
         })
-        if (onZoomTimeChange) {
-          onZoomTimeChange(newZoomTime)
+
+        // Only set zoom-in marker when initially drawing crop, not when editing
+        if (isDrawing) {
+          const newZoomTime = currentTime
+          setZoomStartTime(newZoomTime)
+          if (onZoomTimeChange) {
+            onZoomTimeChange(newZoomTime)
+          }
         }
       }
     }
