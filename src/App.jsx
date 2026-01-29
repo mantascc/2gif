@@ -24,6 +24,12 @@ function App() {
     loop: 0,
     quality: 'high'
   })
+  const [backgroundSettings, setBackgroundSettings] = useState({
+    enabled: true,
+    color: '#292929', // Default dark gray
+    padding: 0.1,     // 10%
+    borderRadius: 16
+  })
   const fileInputRef = useRef(null)
   const ffmpegRef = useRef(null)
 
@@ -109,6 +115,40 @@ function App() {
       // Build filter string based on settings
       const { fps, width, colors, dither, loop } = exportSettings
 
+      // Generate mask if background is enabled
+      let maskFile = null
+      if (backgroundSettings.enabled) {
+        // Create a canvas to draw the mask
+        const maskCanvas = document.createElement('canvas')
+        const videoElement = document.createElement('video')
+        videoElement.src = URL.createObjectURL(videoFile)
+        await new Promise(r => videoElement.onloadedmetadata = r)
+
+        // Use export width to determine dimensions
+        const videoAspect = videoElement.videoWidth / videoElement.videoHeight
+        const targetHeight = Math.round(width / videoAspect)
+
+        maskCanvas.width = width
+        maskCanvas.height = targetHeight
+
+        const ctx = maskCanvas.getContext('2d')
+        // Clear with transparent
+        ctx.clearRect(0, 0, width, targetHeight)
+
+        // Draw white rounded rectangle
+        ctx.fillStyle = 'white'
+        ctx.beginPath()
+        ctx.roundRect(0, 0, width, targetHeight, backgroundSettings.borderRadius)
+        ctx.fill()
+
+        // Convert to blob and write to ffmpeg
+        const blob = await new Promise(r => maskCanvas.toBlob(r, 'image/png'))
+        const arrayBuffer = await blob.arrayBuffer()
+        const uint8Array = new Uint8Array(arrayBuffer)
+        await ffmpeg.writeFile('mask.png', uint8Array)
+        maskFile = 'mask.png'
+      }
+
       // STAGE 2: Zoom/Crop Logic with Zoom In/Out support
       if (cropRect && zoomStartTime !== null && zoomStartTime > 0) {
         // Calculate target height to maintain aspect ratio
@@ -122,6 +162,30 @@ function App() {
         const safeWidth = width % 2 === 0 ? width : width - 1
         const safeHeight = targetHeight % 2 === 0 ? targetHeight : targetHeight - 1
 
+        // Clamp cropRect to prevent FFmpeg errors
+        // Reuse videoElement from line 155
+        const videoWidth = videoElement.videoWidth
+        const videoHeight = videoElement.videoHeight
+
+        const clampedCrop = {
+          x: Math.max(0, Math.min(cropRect.x, videoWidth - cropRect.width)),
+          y: Math.max(0, Math.min(cropRect.y, videoHeight - cropRect.height)),
+          width: Math.min(cropRect.width, videoWidth),
+          height: Math.min(cropRect.height, videoHeight)
+        }
+
+        // Double check right/bottom edges to ensure we don't exceed bounds
+        if (clampedCrop.x + clampedCrop.width > videoWidth) {
+          clampedCrop.width = Math.max(1, videoWidth - clampedCrop.x)
+        }
+        if (clampedCrop.y + clampedCrop.height > videoHeight) {
+          clampedCrop.height = Math.max(1, videoHeight - clampedCrop.y)
+        }
+
+        // Ensure even dimensions for crop to avoid some ffmpeg issues with certain codecs/filters
+        clampedCrop.width = Math.floor(clampedCrop.width / 2) * 2
+        clampedCrop.height = Math.floor(clampedCrop.height / 2) * 2
+
         let filterComplex
 
         if (zoomEndTime !== null && zoomEndTime > zoomStartTime) {
@@ -130,43 +194,73 @@ function App() {
             trimRange,
             zoomStartTime,
             zoomEndTime,
-            cropRect,
+            clampedCrop,
             fps,
             safeWidth,
             safeHeight,
             colors,
-            dither
+            dither,
+            backgroundSettings.enabled ? backgroundSettings : null,
+            maskFile
           )
         } else {
           // 2-PART: Normal → Zoomed (no zoom out)
           filterComplex = buildTwoPartFilter(
             trimRange,
             zoomStartTime,
-            cropRect,
+            clampedCrop,
             fps,
             safeWidth,
             safeHeight,
             colors,
-            dither
+            dither,
+            backgroundSettings.enabled ? backgroundSettings : null,
+            maskFile
           )
         }
 
-        await ffmpeg.exec([
-          '-i', 'input.mp4',
-          '-filter_complex', filterComplex,
-          '-loop', loop.toString(),
-          'output.gif'
-        ])
+        const ffmpegArgs = ['-i', 'input.mp4']
+        if (maskFile) {
+          ffmpegArgs.push('-i', maskFile)
+        }
+        ffmpegArgs.push('-filter_complex', filterComplex)
+        ffmpegArgs.push('-loop', loop.toString())
+        ffmpegArgs.push('output.gif')
+
+        console.log('FFmpeg Args (Complex):', ffmpegArgs)
+
+        // Debug file system
+        try {
+          const files = await ffmpeg.listDir('/')
+          console.log('FS Root:', files)
+        } catch (e) {
+          console.error('Failed to list dir:', e)
+        }
+
+        await ffmpeg.exec(ffmpegArgs)
       } else {
         // STAGE 1: Basic full video export with trimming
-        const filter = buildSimpleFilter(trimRange, fps, width, colors, dither)
+        const filter = buildSimpleFilter(
+          trimRange,
+          fps,
+          width,
+          colors,
+          dither,
+          backgroundSettings.enabled ? backgroundSettings : null,
+          maskFile
+        )
 
-        await ffmpeg.exec([
-          '-i', 'input.mp4',
-          '-vf', filter,
-          '-loop', loop.toString(),
-          'output.gif'
-        ])
+        const filterFlag = backgroundSettings.enabled ? '-filter_complex' : '-vf'
+
+        const ffmpegArgs = ['-i', 'input.mp4']
+        if (maskFile && backgroundSettings.enabled) {
+          ffmpegArgs.push('-i', maskFile)
+        }
+        ffmpegArgs.push(filterFlag, filter)
+        ffmpegArgs.push('-loop', loop.toString())
+        ffmpegArgs.push('output.gif')
+
+        await ffmpeg.exec(ffmpegArgs)
       }
 
       // Read the output GIF
@@ -184,6 +278,7 @@ function App() {
       // Cleanup
       await ffmpeg.deleteFile('input.mp4')
       await ffmpeg.deleteFile('output.gif')
+      if (maskFile) await ffmpeg.deleteFile('mask.png')
 
       setProcessing(false)
       setProgress(0)
@@ -249,6 +344,7 @@ function App() {
             zoomEndTime={zoomEndTime}
             onZoomEndTimeChange={setZoomEndTime}
             onCurrentTimeChange={setCurrentTime}
+            backgroundSettings={backgroundSettings}
           />
         )}
       </div>
@@ -286,88 +382,88 @@ function App() {
 
             {/* STAGE 2: Zoom UI */}
             <div className="settings-section">
-                <h2>Zoom</h2>
-                <div className="control-group">
-                  {cropRect ? (
-                    <>
-                      <div className="control-label">Selection</div>
+              <h2>Zoom</h2>
+              <div className="control-group">
+                {cropRect ? (
+                  <>
+                    <div className="control-label">Selection</div>
+                    <p style={{
+                      fontSize: '13px',
+                      fontFamily: 'var(--font-mono)',
+                      color: 'var(--text-primary)',
+                    }}>
+                      {cropRect.width}×{cropRect.height}
+                    </p>
+                    {zoomStartTime !== null && (
                       <p style={{
-                        fontSize: '13px',
+                        fontSize: '12px',
                         fontFamily: 'var(--font-mono)',
-                        color: 'var(--text-primary)',
+                        color: 'var(--success)',
+                        marginTop: '4px'
                       }}>
-                        {cropRect.width}×{cropRect.height}
+                        Zoom-in at {(zoomStartTime - trimRange[0]).toFixed(1)}s
                       </p>
-                      {zoomStartTime !== null && (
-                        <p style={{
-                          fontSize: '12px',
-                          fontFamily: 'var(--font-mono)',
-                          color: 'var(--success)',
-                          marginTop: '4px'
-                        }}>
-                          Zoom-in at {(zoomStartTime - trimRange[0]).toFixed(1)}s
-                        </p>
-                      )}
-                      {zoomEndTime !== null && (
-                        <p style={{
-                          fontSize: '12px',
-                          fontFamily: 'var(--font-mono)',
-                          color: '#e67e22',
-                          marginTop: '4px'
-                        }}>
-                          Zoom-out at {(zoomEndTime - trimRange[0]).toFixed(1)}s
-                        </p>
-                      )}
+                    )}
+                    {zoomEndTime !== null && (
+                      <p style={{
+                        fontSize: '12px',
+                        fontFamily: 'var(--font-mono)',
+                        color: '#e67e22',
+                        marginTop: '4px'
+                      }}>
+                        Zoom-out at {(zoomEndTime - trimRange[0]).toFixed(1)}s
+                      </p>
+                    )}
+                    <button
+                      style={{
+                        marginTop: '8px',
+                        padding: '6px 12px',
+                        backgroundColor: 'var(--surface-2)',
+                        color: 'var(--text-secondary)',
+                        border: '1px solid var(--border-subtle)',
+                        borderRadius: 'var(--radius)',
+                        fontSize: '12px',
+                        fontFamily: 'var(--font-mono)',
+                      }}
+                      onClick={() => {
+                        setCropRect(null)
+                        setZoomStartTime(null)
+                      }}
+                    >
+                      Clear Zoom
+                    </button>
+                    {zoomStartTime !== null && zoomEndTime === null && (
                       <button
                         style={{
                           marginTop: '8px',
+                          marginLeft: '8px',
                           padding: '6px 12px',
                           backgroundColor: 'var(--surface-2)',
-                          color: 'var(--text-secondary)',
+                          color: '#e67e22',
                           border: '1px solid var(--border-subtle)',
                           borderRadius: 'var(--radius)',
                           fontSize: '12px',
                           fontFamily: 'var(--font-mono)',
                         }}
                         onClick={() => {
-                          setCropRect(null)
-                          setZoomStartTime(null)
+                          const end = Math.max(zoomStartTime + 0.5, Math.min(trimRange[1], currentTime))
+                          setZoomEndTime(end)
                         }}
                       >
-                        Clear Zoom
+                        Add Zoom Out
                       </button>
-                      {zoomStartTime !== null && zoomEndTime === null && (
-                        <button
-                          style={{
-                            marginTop: '8px',
-                            marginLeft: '8px',
-                            padding: '6px 12px',
-                            backgroundColor: 'var(--surface-2)',
-                            color: '#e67e22',
-                            border: '1px solid var(--border-subtle)',
-                            borderRadius: 'var(--radius)',
-                            fontSize: '12px',
-                            fontFamily: 'var(--font-mono)',
-                          }}
-                          onClick={() => {
-                            const end = Math.max(zoomStartTime + 0.5, Math.min(trimRange[1], currentTime))
-                            setZoomEndTime(end)
-                          }}
-                        >
-                          Add Zoom Out
-                        </button>
-                      )}
-                    </>
-                  ) : (
-                    <p style={{
-                      fontSize: '12px',
-                      color: 'var(--text-disabled)',
-                    }}>
-                      Select an area in the video to zoom in
-                    </p>
-                  )}
-                </div>
+                    )}
+                  </>
+                ) : (
+                  <p style={{
+                    fontSize: '12px',
+                    color: 'var(--text-disabled)',
+                  }}>
+                    Select an area in the video to zoom in
+                  </p>
+                )}
               </div>
+            </div>
 
             <div className="settings-section">
               <button
@@ -542,6 +638,58 @@ function App() {
 
 
                 </div>
+              )}
+            </div>
+
+            <div className="settings-section">
+              <h2>Background</h2>
+              <div className="control-group">
+                <label className="control-label" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  Enable Background
+                  <input
+                    type="checkbox"
+                    checked={backgroundSettings.enabled}
+                    onChange={(e) => setBackgroundSettings({ ...backgroundSettings, enabled: e.target.checked })}
+                  />
+                </label>
+              </div>
+
+              {backgroundSettings.enabled && (
+                <>
+                  <div className="control-group">
+                    <label className="control-label">Color</label>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      <input
+                        type="color"
+                        value={backgroundSettings.color}
+                        onChange={(e) => setBackgroundSettings({ ...backgroundSettings, color: e.target.value })}
+                        style={{
+                          width: '32px',
+                          height: '32px',
+                          border: 'none',
+                          padding: 0,
+                          backgroundColor: 'transparent',
+                          cursor: 'pointer'
+                        }}
+                      />
+                      <input
+                        type="text"
+                        value={backgroundSettings.color}
+                        onChange={(e) => setBackgroundSettings({ ...backgroundSettings, color: e.target.value })}
+                        style={{
+                          flex: 1,
+                          backgroundColor: 'var(--surface-2)',
+                          border: '1px solid var(--border-subtle)',
+                          color: 'var(--text-primary)',
+                          borderRadius: 'var(--radius)',
+                          padding: '6px 8px',
+                          fontFamily: 'var(--font-mono)',
+                          fontSize: '12px'
+                        }}
+                      />
+                    </div>
+                  </div>
+                </>
               )}
             </div>
           </>

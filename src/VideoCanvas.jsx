@@ -15,8 +15,21 @@ function VideoCanvas({
   zoomTime,
   zoomEndTime,
   onZoomEndTimeChange,
-  onCurrentTimeChange
+  onCurrentTimeChange,
+  backgroundSettings
 }) {
+  // Helper to calculate the rendered video rect (inner area if background enabled)
+  const getVideoRect = (renderWidth, renderHeight) => {
+    if (backgroundSettings && backgroundSettings.enabled) {
+      const scaleFactor = 1 / (1 + backgroundSettings.padding)
+      const innerWidth = renderWidth * scaleFactor
+      const innerHeight = renderHeight * scaleFactor
+      const ox = (renderWidth - innerWidth) / 2
+      const oy = (renderHeight - innerHeight) / 2
+      return { x: ox, y: oy, width: innerWidth, height: innerHeight }
+    }
+    return { x: 0, y: 0, width: renderWidth, height: renderHeight }
+  }
   const canvasRef = useRef(null)
   const videoRef = useRef(null)
   const animationRef = useRef(null)
@@ -98,13 +111,7 @@ function VideoCanvas({
         canvas.width = renderWidth
         canvas.height = renderHeight
 
-        // Draw video
-        ctx.drawImage(video, 0, 0, renderWidth, renderHeight)
-
-        // Draw crop overlay
-        if (cropRect) {
-          drawCropOverlay(ctx, renderWidth, renderHeight)
-        }
+        drawVideoFrame(ctx, video, renderWidth, renderHeight)
       }
 
       if (isPlaying) {
@@ -123,7 +130,33 @@ function VideoCanvas({
         cancelAnimationFrame(animationRef.current)
       }
     }
-  }, [videoDimensions, isPlaying, cropRect])
+  }, [videoDimensions, isPlaying, cropRect, backgroundSettings])
+
+  const drawVideoFrame = (ctx, video, width, height) => {
+    // Draw video
+    if (backgroundSettings && backgroundSettings.enabled) {
+      // Fill background
+      ctx.fillStyle = backgroundSettings.color
+      ctx.fillRect(0, 0, width, height)
+
+      const { x: ox, y: oy, width: innerWidth, height: innerHeight } = getVideoRect(width, height)
+
+      ctx.save()
+      ctx.beginPath()
+      ctx.roundRect(ox, oy, innerWidth, innerHeight, backgroundSettings.borderRadius)
+      ctx.clip()
+
+      ctx.drawImage(video, ox, oy, innerWidth, innerHeight)
+      ctx.restore()
+    } else {
+      ctx.drawImage(video, 0, 0, width, height)
+    }
+
+    // Draw crop overlay
+    if (cropRect) {
+      drawCropOverlay(ctx, width, height)
+    }
+  }
 
   const renderFrame = () => {
     const canvas = canvasRef.current
@@ -131,10 +164,7 @@ function VideoCanvas({
     const ctx = canvas?.getContext('2d')
     if (!canvas || !video || !ctx) return
 
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-    if (cropRect) {
-      drawCropOverlay(ctx, canvas.width, canvas.height)
-    }
+    drawVideoFrame(ctx, video, canvas.width, canvas.height)
   }
 
   const drawCropOverlay = (ctx, canvasWidth, canvasHeight) => {
@@ -183,8 +213,12 @@ function VideoCanvas({
     // Draw dimensions (centered above)
     ctx.fillStyle = 'var(--accent)'
     ctx.font = '12px var(--font-mono)'
-    const scaleX = videoDimensions.width / canvasWidth
-    const scaleY = videoDimensions.height / canvasHeight
+
+    // Calculate display dimensions based on inner video
+    const { width: innerWidth, height: innerHeight } = getVideoRect(canvasWidth, canvasHeight)
+    const scaleX = videoDimensions.width / innerWidth
+    const scaleY = videoDimensions.height / innerHeight
+
     const actualWidth = Math.round(width * scaleX)
     const actualHeight = Math.round(height * scaleY)
     const text = `${actualWidth}×${actualHeight}`
@@ -205,7 +239,17 @@ function VideoCanvas({
   const getHandleAtPos = (x, y) => {
     if (!cropRect) return null
 
-    const handleSize = 30 // Much larger hit area for easier clicking
+    const handleSize = 30
+
+    // Adjust handles to visual position
+    // cropRect is in VIDEO space relative coords? 
+    // NO, cropRect is currently in CANVAS pixels from previous implementation.
+    // BUT we need to check handles visually on screen.
+    // If cropRect is stored relative to canvas 0,0 (old way), then it might be partly in padding area.
+    // Ideally, cropRect should track position relative to VIDEO surface?
+    // Let's assume cropRect is in CANVAS coordinates but we force it inside video area during drag.
+    // So here we just check distance.
+
     const handles = [
       { name: 'tl', x: cropRect.x, y: cropRect.y },
       { name: 'tr', x: cropRect.x + cropRect.width, y: cropRect.y },
@@ -238,9 +282,16 @@ function VideoCanvas({
       setDragStart(pos)
     } else {
       // Start drawing new crop rect
+      // Constrain start point to video area
+      const canvas = canvasRef.current
+      const videoRect = getVideoRect(canvas.width, canvas.height)
+
+      const startX = Math.max(videoRect.x, Math.min(pos.x, videoRect.x + videoRect.width))
+      const startY = Math.max(videoRect.y, Math.min(pos.y, videoRect.y + videoRect.height))
+
       setIsDrawing(true)
-      setDragStart(pos)
-      setCropRect({ x: pos.x, y: pos.y, width: 0, height: 0 })
+      setDragStart({ x: startX, y: startY })
+      setCropRect({ x: startX, y: startY, width: 0, height: 0 })
     }
   }
 
@@ -286,30 +337,32 @@ function VideoCanvas({
         newCrop.height += dy
       }
 
-      // Clamp to canvas bounds
+      // Clamp to VIDEO bounds (not canvas bounds)
       const canvas = canvasRef.current
+      // Calculate video rect again
+      const videoRect = getVideoRect(canvas.width, canvas.height)
       const videoAspect = videoDimensions.width / videoDimensions.height
 
       // First clamp x/y to bounds
-      newCrop.x = Math.max(0, Math.min(newCrop.x, canvas.width - 50))
-      newCrop.y = Math.max(0, Math.min(newCrop.y, canvas.height - 50))
+      newCrop.x = Math.max(videoRect.x, Math.min(newCrop.x, videoRect.x + videoRect.width - 20)) // min 20 px?
+      newCrop.y = Math.max(videoRect.y, Math.min(newCrop.y, videoRect.y + videoRect.height - 20))
 
       // Enforce aspect ratio on width/height
       if (dragHandle === 'move') {
         // Just moving, check bounds
-        newCrop.x = Math.max(0, Math.min(newCrop.x, canvas.width - newCrop.width))
-        newCrop.y = Math.max(0, Math.min(newCrop.y, canvas.height - newCrop.height))
+        newCrop.x = Math.max(videoRect.x, Math.min(newCrop.x, videoRect.x + videoRect.width - newCrop.width))
+        newCrop.y = Math.max(videoRect.y, Math.min(newCrop.y, videoRect.y + videoRect.height - newCrop.height))
       } else {
         // Resizing
         // Calculate max available width based on x position
-        const maxWidth = canvas.width - newCrop.x
+        const maxWidth = (videoRect.x + videoRect.width) - newCrop.x
 
         // Apply aspect ratio
         newCrop.height = newCrop.width / videoAspect
 
         // Check vertical bounds
-        if (newCrop.y + newCrop.height > canvas.height) {
-          newCrop.height = canvas.height - newCrop.y
+        if (newCrop.y + newCrop.height > videoRect.y + videoRect.height) {
+          newCrop.height = (videoRect.y + videoRect.height) - newCrop.y
           newCrop.width = newCrop.height * videoAspect
         }
       }
@@ -338,12 +391,16 @@ function VideoCanvas({
     if (isDrawing || isDragging) {
       if (cropRect && onCropChange) {
         const canvas = canvasRef.current
-        const scaleX = videoDimensions.width / canvas.width
-        const scaleY = videoDimensions.height / canvas.height
+        const videoRect = getVideoRect(canvas.width, canvas.height)
 
+        // Scale needs to be relative to the INNER video size, not full canvas
+        const scaleX = videoDimensions.width / videoRect.width
+        const scaleY = videoDimensions.height / videoRect.height
+
+        // Coords need to be relative to video origin (ox, oy)
         onCropChange({
-          x: Math.round(cropRect.x * scaleX),
-          y: Math.round(cropRect.y * scaleY),
+          x: Math.round((cropRect.x - videoRect.x) * scaleX),
+          y: Math.round((cropRect.y - videoRect.y) * scaleY),
           width: Math.round(cropRect.width * scaleX),
           height: Math.round(cropRect.height * scaleY)
         })
