@@ -227,16 +227,6 @@ function App() {
         ffmpegArgs.push('-loop', loop.toString())
         ffmpegArgs.push('output.gif')
 
-        console.log('FFmpeg Args (Complex):', ffmpegArgs)
-
-        // Debug file system
-        try {
-          const files = await ffmpeg.listDir('/')
-          console.log('FS Root:', files)
-        } catch (e) {
-          console.error('Failed to list dir:', e)
-        }
-
         await ffmpeg.exec(ffmpegArgs)
       } else {
         // STAGE 1: Basic full video export with trimming
